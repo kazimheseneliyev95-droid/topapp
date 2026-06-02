@@ -42,6 +42,7 @@ export function emptyState() {
     debts: [],
     futureExpenses: [],
     categories: {},
+    defaultRange: 'month',
     user: null,
   };
 }
@@ -78,7 +79,22 @@ export function parseYmd(s) { const [y, m, d] = s.split('-').map(Number); return
 export function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
 export function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 
-const MONTHS_AZ = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'İyun', 'İyul', 'Avqust', 'Sentyabr', 'Oktyabr', 'Noyabr', 'Dekabr'];
+export const MONTHS_AZ = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'İyun', 'İyul', 'Avqust', 'Sentyabr', 'Oktyabr', 'Noyabr', 'Dekabr'];
+export const WEEKDAYS_AZ = ['B.e', 'Ç.a', 'Çər', 'C.a', 'Cüm', 'Şən', 'Baz'];
+
+// Ana ekran tarix aralığı
+export function rangeBounds(range) {
+  const today = todayYmd();
+  const now = new Date();
+  if (range === '7') return { start: ymd(addDays(now, -6)), end: today, label: 'Son 7 gün' };
+  if (range === '15') return { start: ymd(addDays(now, -14)), end: today, label: 'Son 15 gün' };
+  if (range === 'lastmonth') {
+    const lm = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return { start: ymd(lm), end: ymd(new Date(now.getFullYear(), now.getMonth(), 0)), label: 'Keçən ay' };
+  }
+  if (range === 'all') return { start: '0000-00-00', end: '9999-99-99', label: 'Bütün zaman' };
+  return { start: today.slice(0, 7) + '-01', end: today, label: 'Bu ay' };
+}
 export function dateLabel(s) {
   if (!s) return '';
   const t = todayYmd();

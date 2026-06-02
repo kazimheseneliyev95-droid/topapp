@@ -2,13 +2,14 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, LayoutAnimation, Modal, Platform,
-  ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, UIManager, View,
+  Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, UIManager, View,
 } from 'react-native';
 import {
   DEFAULT_CATEGORIES, DEBT_PAYMENT_CAT, KINDS, EMOJI_SET, COLOR_SET,
   emptyState, loadState, saveState, uid, ymd, todayYmd, parseYmd, addDays,
-  dateLabel, shortDate, fmt, azn, parseAmount, catMeta, kindOf, catUsage, subUsage,
+  dateLabel, shortDate, fmt, azn, parseAmount, catMeta, kindOf, catUsage,
   currentCash, calculateStats, overview, buildAlerts, systemMessage, periodStats,
+  daysInMonth, MONTHS_AZ, WEEKDAYS_AZ, rangeBounds,
 } from './src/finance';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -16,18 +17,15 @@ import * as DocumentPicker from 'expo-document-picker';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) UIManager.setLayoutAnimationEnabledExperimental(true);
 const animate = () => { try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) {} };
+const stop = (e) => { if (e && e.stopPropagation) e.stopPropagation(); };
 
-// ---- Yedək: export (.json fayl) / import (bərpa) ----
 async function doExport(state) {
   try {
     const json = JSON.stringify(state, null, 2);
     const name = `xerclem-yedek-${todayYmd()}.json`;
     if (Platform.OS === 'web') {
       const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = name; a.click();
-      URL.revokeObjectURL(url);
-      return;
+      const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url); return;
     }
     const uri = (FileSystem.cacheDirectory || FileSystem.documentDirectory) + name;
     await FileSystem.writeAsStringAsync(uri, json);
@@ -40,12 +38,10 @@ async function doImport(onRestore) {
     const res = await DocumentPicker.getDocumentAsync({ type: 'application/json', copyToCacheDirectory: true });
     if (res.canceled || !res.assets || !res.assets[0]) return;
     let json;
-    if (Platform.OS === 'web') { const r = await fetch(res.assets[0].uri); json = await r.text(); }
-    else json = await FileSystem.readAsStringAsync(res.assets[0].uri);
+    if (Platform.OS === 'web') { const r = await fetch(res.assets[0].uri); json = await r.text(); } else json = await FileSystem.readAsStringAsync(res.assets[0].uri);
     const data = JSON.parse(json);
     if (!data || typeof data !== 'object' || !Array.isArray(data.transactions)) { Alert.alert('Yararsız fayl', 'Bu XƏRCLƏM yedəyi deyil.'); return; }
-    onRestore(data);
-    Alert.alert('Bərpa olundu ✅', 'Məlumatlar geri yükləndi.');
+    onRestore(data); Alert.alert('Bərpa olundu ✅', 'Məlumatlar geri yükləndi.');
   } catch (e) { Alert.alert('Xəta', 'Bərpa alınmadı: ' + (e && e.message)); }
 }
 
@@ -58,6 +54,7 @@ const TINT = {
   purple: { bg: '#f5f3ff', fg: '#7c3aed', bd: '#ddd6fe' },
   slate: { bg: '#f8fafc', fg: '#475569', bd: '#e2e8f0' },
 };
+const RANGES = [{ k: '7', l: 'Son 7 gün' }, { k: '15', l: 'Son 15 gün' }, { k: 'month', l: 'Bu ay' }, { k: 'lastmonth', l: 'Keçən ay' }, { k: 'all', l: 'Hamısı' }];
 
 export default function App() {
   const [loading, setLoading] = useState(true);
@@ -71,19 +68,14 @@ export default function App() {
 
 function Dashboard({ state, commit, update }) {
   const [sheet, setSheet] = useState(null);
-  const [formTx, setFormTx] = useState(null); // null | {} (yeni) | tx (düzəliş)
+  const [formTx, setFormTx] = useState(null);
 
   const ov = useMemo(() => overview(state), [state]);
   const stats = useMemo(() => calculateStats(state), [state]);
   const alerts = useMemo(() => buildAlerts(state), [state]);
   const sysMsg = useMemo(() => systemMessage(ov, stats), [ov, stats]);
 
-  const saveTx = (t) => {
-    animate();
-    const exists = state.transactions.some((x) => x.id === t.id);
-    update({ transactions: exists ? state.transactions.map((x) => x.id === t.id ? t : x) : [t, ...state.transactions] });
-    setFormTx(null);
-  };
+  const saveTx = (t) => { animate(); const ex = state.transactions.some((x) => x.id === t.id); update({ transactions: ex ? state.transactions.map((x) => x.id === t.id ? t : x) : [t, ...state.transactions] }); setFormTx(null); };
   const delTx = (id) => { animate(); update({ transactions: state.transactions.filter((x) => x.id !== id) }); setFormTx(null); };
   const addIncome = (i) => update({ incomes: [i, ...state.incomes] });
   const delIncome = (id) => update({ incomes: state.incomes.filter((x) => x.id !== id) });
@@ -98,34 +90,26 @@ function Dashboard({ state, commit, update }) {
   };
   const addFuture = (f) => update({ futureExpenses: [f, ...state.futureExpenses] });
   const delFuture = (id) => update({ futureExpenses: state.futureExpenses.filter((x) => x.id !== id) });
-  const setCash = (target) => {
-    const inc = state.incomes.filter((i) => i.isReceived).reduce((a, i) => a + i.amount, 0);
-    const exp = state.transactions.reduce((a, t) => a + t.amount, 0);
-    update({ startingBalance: target - inc + exp });
-  };
+  const setCash = (target) => { const inc = state.incomes.filter((i) => i.isReceived).reduce((a, i) => a + i.amount, 0); const exp = state.transactions.reduce((a, t) => a + t.amount, 0); update({ startingBalance: target - inc + exp }); };
   const resetAll = () => commit(emptyState());
   const restore = (data) => commit({ ...emptyState(), ...data });
   const clearCats = () => { animate(); update({ categories: {} }); };
-  // Kateqoriya idarəetməsi
-  const addCategory = (name, icon, color) => {
-    const n = name.trim(); if (!n || state.categories[n]) return false;
-    update({ categories: { ...state.categories, [n]: { icon: icon || '🏷️', color: color || '#64748b', subs: [] } } }); return true;
-  };
-  const addSub = (cat, sub) => {
-    const c = state.categories[cat]; const s = sub.trim(); if (!c || !s || (c.subs || []).includes(s)) return false;
-    update({ categories: { ...state.categories, [cat]: { ...c, subs: [...(c.subs || []), s] } } }); return true;
-  };
+  const addCategory = (name, icon, color) => { const n = name.trim(); if (!n || state.categories[n]) return false; update({ categories: { ...state.categories, [n]: { icon: icon || '🏷️', color: color || '#64748b', subs: [] } } }); return true; };
+  const addSub = (cat, sub) => { const c = state.categories[cat]; const s = sub.trim(); if (!c || !s || (c.subs || []).includes(s)) return false; update({ categories: { ...state.categories, [cat]: { ...c, subs: [...(c.subs || []), s] } } }); return true; };
   const delCategory = (name) => { const c = { ...state.categories }; delete c[name]; update({ categories: c }); };
   const delSub = (cat, sub) => { const c = state.categories[cat]; if (!c) return; update({ categories: { ...state.categories, [cat]: { ...c, subs: c.subs.filter((s) => s !== sub) } } }); };
 
+  const range = state.defaultRange || 'month';
+  const rb = useMemo(() => rangeBounds(range), [range]);
+  const setRange = (r) => update({ defaultRange: r });
   const sections = useMemo(() => {
+    const inRange = state.transactions.filter((e) => e.date >= rb.start && e.date <= rb.end);
     const byDate = {};
-    for (const e of state.transactions) (byDate[e.date] = byDate[e.date] || []).push(e);
-    return Object.keys(byDate).sort((a, b) => b.localeCompare(a)).map((date) => ({
-      date, total: byDate[date].reduce((a, t) => a + t.amount, 0),
-      items: byDate[date].slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
-    }));
-  }, [state.transactions]);
+    for (const e of inRange) (byDate[e.date] = byDate[e.date] || []).push(e);
+    return Object.keys(byDate).sort((a, b) => b.localeCompare(a)).map((date) => ({ date, total: byDate[date].reduce((a, t) => a + t.amount, 0), items: byDate[date].slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) }));
+  }, [state.transactions, rb]);
+  const rangeTotal = useMemo(() => state.transactions.filter((e) => e.category !== DEBT_PAYMENT_CAT && e.date >= rb.start && e.date <= rb.end).reduce((a, t) => a + t.amount, 0), [state.transactions, rb]);
+  const rangeCount = sections.reduce((a, s) => a + s.items.length, 0);
 
   const heroColor = ov.cash > 0 ? '#16a34a' : '#dc2626';
   const catApi = { addCategory, addSub };
@@ -146,7 +130,7 @@ function Dashboard({ state, commit, update }) {
         </View>
 
         <View style={styles.sysMsg}>
-          <View style={styles.sysIcon}><Text style={{ fontSize: 16 }}>📈</Text></View>
+          <View style={styles.sysIcon}><Text style={{ fontSize: 15 }}>📈</Text></View>
           <View style={{ flex: 1 }}><Text style={styles.sysLabel}>SİSTEM MESAJI</Text><Text style={styles.sysText}>{sysMsg}</Text></View>
         </View>
 
@@ -190,7 +174,17 @@ function Dashboard({ state, commit, update }) {
           <TouchableOpacity style={styles.addBtn} onPress={() => setFormTx({})} activeOpacity={0.85}><Text style={styles.addBtnText}>＋  Xərc Əlavə Et</Text></TouchableOpacity>
         </View>
 
-        {sections.length === 0 ? <Text style={styles.emptyText}>Hələ xərc yoxdur. Yuxarıdakı düymə ilə əlavə et.</Text> : sections.map((sec) => (
+        <View style={styles.rangeWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
+            {RANGES.map((r) => <TouchableOpacity key={r.k} onPress={() => setRange(r.k)} style={[styles.rangeChip, range === r.k && styles.rangeChipA]}><Text style={[styles.rangeChipT, range === r.k && styles.rangeChipTA]}>{r.l}</Text></TouchableOpacity>)}
+          </ScrollView>
+        </View>
+        <View style={styles.rangeSummary}>
+          <Text style={styles.rangeSumLabel}>{rb.label}</Text>
+          <Text style={styles.rangeSumVal}>{azn(rangeTotal)}  ·  {rangeCount} əməliyyat</Text>
+        </View>
+
+        {sections.length === 0 ? <Text style={styles.emptyText}>Bu aralıqda xərc yoxdur.</Text> : sections.map((sec) => (
           <View key={sec.date}>
             <View style={styles.secHeader}><Text style={styles.secDate}>{dateLabel(sec.date)}</Text><Text style={styles.secTotal}>{azn(sec.total)}</Text></View>
             {sec.items.map((item) => <Row key={item.id} state={state} item={item} onPress={() => item.category !== DEBT_PAYMENT_CAT && setFormTx(item)} />)}
@@ -209,16 +203,13 @@ function Dashboard({ state, commit, update }) {
   );
 }
 
-function HIcon({ icon, tint, onPress }) {
-  const t = TINT[tint];
-  return <TouchableOpacity style={[styles.hIcon, { backgroundColor: t.bg }]} onPress={onPress} activeOpacity={0.7}><Text style={{ fontSize: 18 }}>{icon}</Text></TouchableOpacity>;
-}
+function HIcon({ icon, tint, onPress }) { const t = TINT[tint]; return <TouchableOpacity style={[styles.hIcon, { backgroundColor: t.bg }]} onPress={onPress} activeOpacity={0.7}><Text style={{ fontSize: 17 }}>{icon}</Text></TouchableOpacity>; }
 function StatCard({ icon, label, value, sub, tint, flex, small }) {
   const t = TINT[tint] || TINT.slate;
   return (
     <View style={[styles.statCard, { backgroundColor: t.bg, borderColor: t.bd }, flex && { flex: 1 }]}>
-      <View style={styles.statHead}><Text style={{ fontSize: 13 }}>{icon}</Text><Text style={[styles.statLabel, { color: t.fg }]}>{label}</Text></View>
-      <Text style={[styles.statValue, small && { fontSize: 16 }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
+      <View style={styles.statHead}><Text style={{ fontSize: 12 }}>{icon}</Text><Text style={[styles.statLabel, { color: t.fg }]}>{label}</Text></View>
+      <Text style={[styles.statValue, small && { fontSize: 15 }]} numberOfLines={1} adjustsFontSizeToFit>{value}</Text>
       {sub ? <Text style={styles.statSub}>{sub}</Text> : null}
     </View>
   );
@@ -227,7 +218,7 @@ function Row({ state, item, onPress }) {
   const c = catMeta(state, item.category); const k = KINDS[kindOf(item)]; const isDebt = item.category === DEBT_PAYMENT_CAT;
   return (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7}>
-      <View style={[styles.rowIcon, { backgroundColor: (isDebt ? '#f43f5e' : c.color) + '22' }]}><Text style={{ fontSize: 18 }}>{isDebt ? '💳' : c.icon}</Text></View>
+      <View style={[styles.rowIcon, { backgroundColor: (isDebt ? '#f43f5e' : c.color) + '22' }]}><Text style={{ fontSize: 17 }}>{isDebt ? '💳' : c.icon}</Text></View>
       <View style={{ flex: 1 }}>
         <Text style={styles.rowTitle}>{item.category}{item.subCategory ? ` · ${item.subCategory}` : ''}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
@@ -240,16 +231,17 @@ function Row({ state, item, onPress }) {
   );
 }
 
-// ===== Xərc forması (əlavə + düzəliş) =====
 function ExpenseSheet({ visible, state, initial, catApi, onClose, onSave, onDelete }) {
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView style={styles.modalRoot} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} />
-          {visible ? <ExpenseForm state={state} initial={initial} catApi={catApi} onCancel={onClose} onSave={onSave} onDelete={onDelete} /> : null}
-        </View>
-      </KeyboardAvoidingView>
+      <Pressable style={styles.modalRoot} onPress={onClose}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kavWrap}>
+          <Pressable style={styles.sheet} onPress={stop}>
+            <View style={styles.sheetHandle} />
+            {visible ? <ExpenseForm state={state} initial={initial} catApi={catApi} onCancel={onClose} onSave={onSave} onDelete={onDelete} /> : null}
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Pressable>
     </Modal>
   );
 }
@@ -260,7 +252,8 @@ function ExpenseForm({ state, initial, catApi, onCancel, onSave, onDelete }) {
   const [kind, setKind] = useState(initial ? kindOf(initial) : 'standard');
   const [date, setDate] = useState(initial ? parseYmd(initial.date) : new Date());
   const [note, setNote] = useState(initial ? (initial.note || '') : '');
-  const [picker, setPicker] = useState(false);
+  const [catPicker, setCatPicker] = useState(false);
+  const [subPicker, setSubPicker] = useState(false);
   const valid = parseAmount(amount) > 0 && cat;
   function bump(d) { setAmount(String(Math.max(0, Math.round((parseAmount(amount) + d) * 100) / 100))); }
   function save() {
@@ -275,16 +268,26 @@ function ExpenseForm({ state, initial, catApi, onCancel, onSave, onDelete }) {
       </View>
       <View style={styles.amountBox}>
         <Text style={styles.amountCur}>₼</Text>
-        <TextInput style={styles.amountInput} placeholder="0.00" placeholderTextColor="#cbd5e1" keyboardType="decimal-pad" value={amount} onChangeText={setAmount} autoFocus={!initial} />
+        <TextInput style={styles.amountInput} placeholder="0.00" placeholderTextColor="#cbd5e1" keyboardType="decimal-pad" value={amount} onChangeText={setAmount} />
         <View><TouchableOpacity style={styles.stepper} onPress={() => bump(1)}><Text style={styles.stepperT}>▲</Text></TouchableOpacity><TouchableOpacity style={styles.stepper} onPress={() => bump(-1)}><Text style={styles.stepperT}>▼</Text></TouchableOpacity></View>
       </View>
 
       <Text style={styles.fLabel}>KATEQORIYA</Text>
-      <TouchableOpacity style={styles.dropdown} onPress={() => setPicker(true)}>
+      <TouchableOpacity style={styles.dropdown} onPress={() => setCatPicker(true)} activeOpacity={0.7}>
         <Text style={styles.ddIcon}>{cat ? catMeta(state, cat).icon : '🗂️'}</Text>
-        <Text style={[styles.ddText, !cat && { color: '#94a3b8' }]}>{cat ? `${cat}${sub ? ' · ' + sub : ''}` : 'Seç və ya yarat...'}</Text>
+        <Text style={[styles.ddText, !cat && { color: '#94a3b8' }]}>{cat || 'Seçin...'}</Text>
         <Text style={styles.ddChevron}>▾</Text>
       </TouchableOpacity>
+
+      {cat ? (
+        <>
+          <Text style={styles.fLabel}>ALT KATEQORIYA</Text>
+          <TouchableOpacity style={styles.dropdown} onPress={() => setSubPicker(true)} activeOpacity={0.7}>
+            <Text style={[styles.ddText, !sub && { color: '#64748b' }]}>{sub || 'Ümumi (Seçilməyib)'}</Text>
+            <Text style={styles.ddChevron}>▾</Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
 
       <Text style={styles.fLabel}>XƏRC NÖVÜ</Text>
       <View style={styles.kindRow}>
@@ -308,110 +311,152 @@ function ExpenseForm({ state, initial, catApi, onCancel, onSave, onDelete }) {
       <TouchableOpacity style={[styles.confirmBtn, !valid && { backgroundColor: '#cbd5e1' }]} onPress={save} disabled={!valid} activeOpacity={0.85}><Text style={styles.confirmText}>{initial ? 'Yadda saxla' : 'Xərci Təsdiqlə'}</Text></TouchableOpacity>
       {initial && onDelete ? <TouchableOpacity style={styles.delLink} onPress={() => Alert.alert('Sil?', 'Bu xərc silinsin?', [{ text: 'İmtina', style: 'cancel' }, { text: 'Sil', style: 'destructive', onPress: () => onDelete(initial.id) }])}><Text style={styles.delLinkText}>Xərci sil</Text></TouchableOpacity> : null}
 
-      <SmartCategoryPicker visible={picker} state={state} catApi={catApi} onClose={() => setPicker(false)} onPick={(c, s) => { setCat(c); setSub(s); setPicker(false); }} />
+      <CategoryPickerModal visible={catPicker} state={state} catApi={catApi} onClose={() => setCatPicker(false)} onPick={(c) => { setCat(c); setSub(''); setCatPicker(false); }} />
+      {cat ? <SubPickerModal visible={subPicker} state={state} cat={cat} catApi={catApi} onClose={() => setSubPicker(false)} onPick={(s) => { setSub(s); setSubPicker(false); }} /> : null}
       <View style={{ height: 8 }} />
     </ScrollView>
   );
 }
 
-// ===== Ağıllı kateqoriya seçici (ara / seç / yarat) =====
-function SmartCategoryPicker({ visible, state, catApi, onClose, onPick }) {
+// Yalnız kateqoriya seçici (ara + yarat)
+function CategoryPickerModal({ visible, state, catApi, onClose, onPick }) {
   const [q, setQ] = useState('');
-  const [open, setOpen] = useState(null);
   const [creating, setCreating] = useState(false);
   const [nName, setNName] = useState(''); const [nIcon, setNIcon] = useState(EMOJI_SET[0]); const [nColor, setNColor] = useState(COLOR_SET[0]);
-  const [newSub, setNewSub] = useState('');
-  const cats = Object.keys(state.categories || DEFAULT_CATEGORIES).filter((c) => c.toLowerCase().includes(q.toLowerCase()));
-  function createCat() {
-    if (!nName.trim()) { Alert.alert('Ad lazımdır'); return; }
-    if (catApi.addCategory(nName, nIcon, nColor)) { const name = nName.trim(); setCreating(false); setNName(''); onPick(name, ''); }
-    else Alert.alert('Bu ad artıq var');
-  }
-  function createSub(c) {
-    if (catApi.addSub(c, newSub)) { const s = newSub.trim(); setNewSub(''); onPick(c, s); }
-    else Alert.alert('Yararsız və ya təkrar alt kateqoriya');
-  }
+  const cats = Object.keys(state.categories || {}).filter((c) => c.toLowerCase().includes(q.toLowerCase()));
+  function createCat() { if (!nName.trim()) { Alert.alert('Ad lazımdır'); return; } if (catApi.addCategory(nName, nIcon, nColor)) { const name = nName.trim(); setCreating(false); setNName(''); onPick(name); } else Alert.alert('Bu ad artıq var'); }
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView style={styles.pickerBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.pickerCard}>
-          <View style={styles.formHead}><Text style={styles.pickerTitle}>Kateqoriya</Text><TouchableOpacity onPress={onClose}><Text style={styles.cancelLink}>Bağla</Text></TouchableOpacity></View>
-
-          {creating ? (
-            <View>
-              <TextInput style={styles.input2} placeholder="Kateqoriya adı" placeholderTextColor="#94a3b8" value={nName} onChangeText={setNName} autoFocus />
-              <Text style={styles.miniLabel}>Emoji</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 2 }}>
-                {EMOJI_SET.map((e) => <TouchableOpacity key={e} onPress={() => setNIcon(e)} style={[styles.emojiBtn, nIcon === e && { borderColor: '#0EA5E9', backgroundColor: '#eff6ff' }]}><Text style={{ fontSize: 20 }}>{e}</Text></TouchableOpacity>)}
-              </ScrollView>
-              <Text style={styles.miniLabel}>Rəng</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>
-                {COLOR_SET.map((c) => <TouchableOpacity key={c} onPress={() => setNColor(c)} style={[styles.colorBtn, { backgroundColor: c }, nColor === c && styles.colorActive]} />)}
-              </ScrollView>
-              <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
-                <TouchableOpacity style={[styles.confirmBtn, { flex: 1, backgroundColor: '#e2e8f0', marginTop: 0 }]} onPress={() => setCreating(false)}><Text style={[styles.confirmText, { color: '#334155' }]}>Geri</Text></TouchableOpacity>
-                <TouchableOpacity style={[styles.confirmBtn, { flex: 2, marginTop: 0 }]} onPress={createCat}><Text style={styles.confirmText}>Yarat & seç</Text></TouchableOpacity>
+      <Pressable style={styles.centerBackdrop} onPress={onClose}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ width: '100%' }}>
+          <Pressable style={styles.pickerCard} onPress={stop}>
+            <View style={styles.formHead}><Text style={styles.pickerTitle}>Kateqoriya</Text><TouchableOpacity onPress={onClose}><Text style={styles.cancelLink}>Bağla</Text></TouchableOpacity></View>
+            {creating ? (
+              <View>
+                <TextInput style={styles.input2} placeholder="Kateqoriya adı" placeholderTextColor="#94a3b8" value={nName} onChangeText={setNName} autoFocus />
+                <Text style={styles.miniLabel}>Emoji</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 2 }}>{EMOJI_SET.map((e) => <TouchableOpacity key={e} onPress={() => setNIcon(e)} style={[styles.emojiBtn, nIcon === e && { borderColor: '#0EA5E9', backgroundColor: '#eff6ff' }]}><Text style={{ fontSize: 19 }}>{e}</Text></TouchableOpacity>)}</ScrollView>
+                <Text style={styles.miniLabel}>Rəng</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>{COLOR_SET.map((c) => <TouchableOpacity key={c} onPress={() => setNColor(c)} style={[styles.colorBtn, { backgroundColor: c }, nColor === c && styles.colorActive]} />)}</ScrollView>
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
+                  <TouchableOpacity style={[styles.confirmBtn, { flex: 1, backgroundColor: '#e2e8f0', marginTop: 0 }]} onPress={() => setCreating(false)}><Text style={[styles.confirmText, { color: '#334155' }]}>Geri</Text></TouchableOpacity>
+                  <TouchableOpacity style={[styles.confirmBtn, { flex: 2, marginTop: 0 }]} onPress={createCat}><Text style={styles.confirmText}>Yarat & seç</Text></TouchableOpacity>
+                </View>
               </View>
-            </View>
-          ) : (
-            <>
-              <TextInput style={styles.search} placeholder="🔍 Axtar..." placeholderTextColor="#94a3b8" value={q} onChangeText={setQ} />
-              <TouchableOpacity style={styles.createRow} onPress={() => setCreating(true)}><Text style={styles.createRowText}>➕  Yeni kateqoriya yarat</Text></TouchableOpacity>
-              <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
-                {cats.map((c) => {
-                  const meta = state.categories[c]; const isOpen = open === c; const subs = meta.subs || [];
-                  return (
-                    <View key={c}>
-                      <TouchableOpacity style={styles.pickerRow} onPress={() => { animate(); subs.length ? setOpen(isOpen ? null : c) : onPick(c, ''); }}>
-                        <View style={[styles.catDot, { backgroundColor: meta.color + '22' }]}><Text style={{ fontSize: 16 }}>{meta.icon}</Text></View>
-                        <Text style={styles.pickerLabel}>{c}</Text>
-                        {subs.length ? <Text style={styles.pickerChevron}>{isOpen ? '▾' : `${subs.length} ▸`}</Text> : <Text style={styles.pickerChevron}>seç</Text>}
-                      </TouchableOpacity>
-                      {isOpen && (
-                        <View style={styles.subWrap}>
-                          <TouchableOpacity style={styles.subRow} onPress={() => onPick(c, '')}><Text style={[styles.subRowText, { color: meta.color, fontWeight: '700' }]}>• Yalnız {c}</Text></TouchableOpacity>
-                          {subs.map((sc) => <TouchableOpacity key={sc} style={styles.subRow} onPress={() => onPick(c, sc)}><Text style={styles.subRowText}>{sc}</Text></TouchableOpacity>)}
-                          <View style={styles.addSubRow}>
-                            <TextInput style={styles.addSubInput} placeholder="Yeni alt kateqoriya..." placeholderTextColor="#94a3b8" value={open === c ? newSub : ''} onChangeText={setNewSub} />
-                            <TouchableOpacity style={styles.addSubBtn} onPress={() => createSub(c)}><Text style={{ color: '#fff', fontWeight: '800' }}>＋</Text></TouchableOpacity>
-                          </View>
-                        </View>
-                      )}
-                    </View>
-                  );
-                })}
-                {cats.length === 0 ? <Text style={styles.emptyMini}>Tapılmadı — yuxarıdan yenisini yarat</Text> : null}
-              </ScrollView>
-            </>
-          )}
-        </View>
-      </KeyboardAvoidingView>
+            ) : (
+              <>
+                <TextInput style={styles.search} placeholder="🔍 Axtar..." placeholderTextColor="#94a3b8" value={q} onChangeText={setQ} />
+                <TouchableOpacity style={styles.createRow} onPress={() => setCreating(true)}><Text style={styles.createRowText}>➕  Yeni kateqoriya yarat</Text></TouchableOpacity>
+                <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+                  {cats.map((c) => { const meta = state.categories[c]; return (
+                    <TouchableOpacity key={c} style={styles.pickerRow} onPress={() => onPick(c)}>
+                      <View style={[styles.catDot, { backgroundColor: meta.color + '22' }]}><Text style={{ fontSize: 15 }}>{meta.icon}</Text></View>
+                      <Text style={styles.pickerLabel}>{c}</Text>
+                      <Text style={styles.pickerChevron}>{(meta.subs || []).length} alt</Text>
+                    </TouchableOpacity>
+                  ); })}
+                  {cats.length === 0 ? <Text style={styles.emptyMini}>Tapılmadı — yuxarıdan yarat</Text> : null}
+                </ScrollView>
+              </>
+            )}
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Pressable>
     </Modal>
   );
 }
 
-// ===== Ortak =====
+// Alt kateqoriya seçici (Ümumi + var olanlar + yarat)
+function SubPickerModal({ visible, state, cat, catApi, onClose, onPick }) {
+  const [newSub, setNewSub] = useState('');
+  const subs = ((state.categories[cat] || { subs: [] }).subs) || [];
+  function createSub() { if (catApi.addSub(cat, newSub)) { const s = newSub.trim(); setNewSub(''); onPick(s); } else Alert.alert('Yararsız və ya təkrar'); }
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.centerBackdrop} onPress={onClose}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ width: '100%' }}>
+          <Pressable style={styles.pickerCard} onPress={stop}>
+            <View style={styles.formHead}><Text style={styles.pickerTitle}>Alt kateqoriya</Text><TouchableOpacity onPress={onClose}><Text style={styles.cancelLink}>Bağla</Text></TouchableOpacity></View>
+            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+              <TouchableOpacity style={styles.pickerRow} onPress={() => onPick('')}><Text style={[styles.pickerLabel, { color: '#64748b' }]}>Ümumi (Seçilməyib)</Text></TouchableOpacity>
+              {subs.map((s) => <TouchableOpacity key={s} style={styles.pickerRow} onPress={() => onPick(s)}><Text style={styles.pickerLabel}>{s}</Text></TouchableOpacity>)}
+            </ScrollView>
+            <View style={styles.addSubRow}>
+              <TextInput style={styles.addSubInput} placeholder="Yeni alt kateqoriya..." placeholderTextColor="#94a3b8" value={newSub} onChangeText={setNewSub} />
+              <TouchableOpacity style={styles.addSubBtn} onPress={createSub}><Text style={{ color: '#fff', fontWeight: '800' }}>＋</Text></TouchableOpacity>
+            </View>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Pressable>
+    </Modal>
+  );
+}
+
 function Sheet({ visible, onClose, title, children }) {
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView style={styles.modalRoot} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={styles.sheet}>
-          <View style={styles.sheetHandle} />
-          <View style={styles.sheetHead}><Text style={styles.sheetTitle}>{title}</Text><TouchableOpacity onPress={onClose} hitSlop={10}><Text style={styles.sheetClose}>✕</Text></TouchableOpacity></View>
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">{children}</ScrollView>
-        </View>
-      </KeyboardAvoidingView>
+      <Pressable style={styles.modalRoot} onPress={onClose}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kavWrap}>
+          <Pressable style={styles.sheet} onPress={stop}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHead}><Text style={styles.sheetTitle}>{title}</Text><TouchableOpacity onPress={onClose} hitSlop={10}><Text style={styles.sheetClose}>✕</Text></TouchableOpacity></View>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">{children}</ScrollView>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Pressable>
     </Modal>
   );
 }
 function DateStepper({ date, setDate, maxToday }) {
+  const [cal, setCal] = useState(false);
   const canFwd = !maxToday || ymd(date) < todayYmd();
   return (
     <View style={styles.dateRow}>
       <TouchableOpacity style={styles.dateArrow} onPress={() => setDate(addDays(date, -1))}><Text style={styles.dateArrowT}>◀</Text></TouchableOpacity>
-      <Text style={styles.dateVal}>{dateLabel(ymd(date))}</Text>
+      <TouchableOpacity style={{ flex: 1, alignItems: 'center', paddingVertical: 4 }} onPress={() => setCal(true)} activeOpacity={0.7}><Text style={styles.dateVal}>{dateLabel(ymd(date))}  📅</Text></TouchableOpacity>
       <TouchableOpacity style={[styles.dateArrow, !canFwd && { opacity: 0.3 }]} disabled={!canFwd} onPress={() => setDate(addDays(date, 1))}><Text style={styles.dateArrowT}>▶</Text></TouchableOpacity>
+      <CalendarModal visible={cal} value={date} maxToday={maxToday} onClose={() => setCal(false)} onPick={(d) => { setDate(d); setCal(false); }} />
     </View>
+  );
+}
+function CalendarModal({ visible, value, maxToday, onClose, onPick }) {
+  const [view, setView] = useState(value || new Date());
+  const y = view.getFullYear(), m = view.getMonth();
+  const startWeekday = (new Date(y, m, 1).getDay() + 6) % 7;
+  const dim = daysInMonth(y, m);
+  const today = todayYmd();
+  const selY = value ? ymd(value) : null;
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= dim; d++) cells.push(d);
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.centerBackdrop} onPress={onClose}>
+        <Pressable style={styles.calCard} onPress={stop}>
+          <View style={styles.calHead}>
+            <TouchableOpacity style={styles.calNavBtn} onPress={() => setView(new Date(y, m - 1, 1))}><Text style={styles.calNav}>‹</Text></TouchableOpacity>
+            <Text style={styles.calTitle}>{MONTHS_AZ[m]} {y}</Text>
+            <TouchableOpacity style={styles.calNavBtn} onPress={() => setView(new Date(y, m + 1, 1))}><Text style={styles.calNav}>›</Text></TouchableOpacity>
+          </View>
+          <View style={styles.calWeek}>{WEEKDAYS_AZ.map((w) => <Text key={w} style={styles.calWeekT}>{w}</Text>)}</View>
+          <View style={styles.calGrid}>
+            {cells.map((d, i) => {
+              if (d === null) return <View key={'e' + i} style={styles.calCell} />;
+              const ds = ymd(new Date(y, m, d));
+              const isToday = ds === today, isSel = ds === selY, disabled = maxToday && ds > today;
+              return (
+                <TouchableOpacity key={i} style={styles.calCell} disabled={disabled} onPress={() => onPick(new Date(y, m, d))} activeOpacity={0.7}>
+                  <View style={[styles.calDay, isToday && !isSel && styles.calDayToday, isSel && styles.calDaySel]}>
+                    <Text style={[styles.calDayT, isSel && { color: '#fff', fontWeight: '800' }, disabled && { color: '#cbd5e1' }]}>{d}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <TouchableOpacity style={styles.calTodayBtn} onPress={() => onPick(new Date())}><Text style={styles.calTodayBtnT}>Bu günə qayıt</Text></TouchableOpacity>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 function Bar({ label, value, max, color, onPress, right }) {
@@ -486,27 +531,21 @@ function FutureSheet({ visible, state, onClose, onAdd, onDelete }) {
   );
 }
 
-// ===== Qabaqcıl statistika (dövr + drill-down) =====
 const PERIODS = [{ k: 'today', l: 'Bu gün' }, { k: 'week', l: 'Həftə' }, { k: 'month', l: 'Bu ay' }, { k: 'all', l: 'Hamısı' }];
 function StatsSheet({ visible, state, onClose }) {
   const [period, setPeriod] = useState('month');
   const [drillCat, setDrillCat] = useState(null);
   const [drillSub, setDrillSub] = useState(null);
   const ps = useMemo(() => periodStats(state, period), [state, period]);
-
+  const pc = (v) => ps.total ? Math.round((v / ps.total) * 100) : 0;
   const catE = Object.entries(ps.categoryBreakdown).sort((a, b) => b[1] - a[1]);
   const maxC = Math.max(1, ...catE.map((e) => e[1]));
   const kinds = [{ l: '🛡️ Vacib', v: ps.essential, c: '#16a34a' }, { l: '🛒 Standart', v: ps.standard, c: '#ca8a04' }, { l: '🔥 İsraf', v: ps.wasteful, c: '#ea580c' }];
   const maxK = Math.max(1, ...kinds.map((k) => k.v));
-
   function reset() { setDrillCat(null); setDrillSub(null); }
-
   return (
     <Sheet visible={visible} onClose={() => { reset(); onClose(); }} title="📊 Statistika">
-      <View style={styles.segment}>
-        {PERIODS.map((p) => <TouchableOpacity key={p.k} onPress={() => { setPeriod(p.k); reset(); }} style={[styles.segBtn, period === p.k && styles.segActive]}><Text style={[styles.segText, period === p.k && styles.segTextA]}>{p.l}</Text></TouchableOpacity>)}
-      </View>
-
+      <View style={styles.segment}>{PERIODS.map((p) => <TouchableOpacity key={p.k} onPress={() => { setPeriod(p.k); reset(); }} style={[styles.segBtn, period === p.k && styles.segActive]}><Text style={[styles.segText, period === p.k && styles.segTextA]}>{p.l}</Text></TouchableOpacity>)}</View>
       <View style={styles.sumRow}>
         <View style={styles.sumCard}><Text style={styles.sumLabel}>Xərc</Text><Text style={[styles.sumVal, { color: '#dc2626' }]}>{azn(ps.total)}</Text></View>
         <View style={styles.sumCard}><Text style={styles.sumLabel}>Gəlir</Text><Text style={[styles.sumVal, { color: '#16a34a' }]}>{azn(ps.incomeTotal)}</Text></View>
@@ -517,19 +556,15 @@ function StatsSheet({ visible, state, onClose }) {
       {!drillCat ? (
         <>
           <Text style={styles.statH}>Növə görə</Text>
-          {kinds.map((k) => <Bar key={k.l} label={k.l} value={k.v} max={maxK} color={k.c} right={`${ps.total ? Math.round((k.v / ps.total) * 100) : 0}% · ${azn(k.v)}`} />)}
+          {kinds.map((k) => <Bar key={k.l} label={k.l} value={k.v} max={maxK} color={k.c} right={`${pc(k.v)}%  ·  ${azn(k.v)}`} />)}
           <Text style={styles.statH}>Kateqoriya üzrə  <Text style={styles.tapHint}>(detay üçün toxun)</Text></Text>
-          {catE.length === 0 ? <Text style={styles.emptyMini}>Bu dövrdə xərc yoxdur</Text> : catE.map(([n, v]) => <Bar key={n} label={`${catMeta(state, n).icon} ${n}`} value={v} max={maxC} color={catMeta(state, n).color} right={`${Math.round((v / ps.total) * 100)}%`} onPress={() => { animate(); setDrillCat(n); }} />)}
+          {catE.length === 0 ? <Text style={styles.emptyMini}>Bu dövrdə xərc yoxdur</Text> : catE.map(([n, v]) => <Bar key={n} label={`${catMeta(state, n).icon} ${n}`} value={v} max={maxC} color={catMeta(state, n).color} right={`${pc(v)}%  ·  ${azn(v)}`} onPress={() => { animate(); setDrillCat(n); }} />)}
         </>
       ) : !drillSub ? (
         <>
           <TouchableOpacity style={styles.crumb} onPress={() => { animate(); setDrillCat(null); }}><Text style={styles.crumbText}>‹ Geri · {catMeta(state, drillCat).icon} {drillCat}</Text></TouchableOpacity>
           <Text style={styles.statH}>Alt kateqoriyalar</Text>
-          {(() => {
-            const subs = Object.entries(ps.subBreakdown[drillCat] || {}).sort((a, b) => b[1] - a[1]);
-            const maxS = Math.max(1, ...subs.map((e) => e[1]));
-            return subs.map(([sn, sv]) => <Bar key={sn} label={sn} value={sv} max={maxS} color={catMeta(state, drillCat).color} onPress={() => { animate(); setDrillSub(sn); }} />);
-          })()}
+          {(() => { const subs = Object.entries(ps.subBreakdown[drillCat] || {}).sort((a, b) => b[1] - a[1]); const maxS = Math.max(1, ...subs.map((e) => e[1])); return subs.map(([sn, sv]) => <Bar key={sn} label={sn} value={sv} max={maxS} color={catMeta(state, drillCat).color} right={`${pc(sv)}%  ·  ${azn(sv)}`} onPress={() => { animate(); setDrillSub(sn); }} />); })()}
         </>
       ) : (
         <>
@@ -545,23 +580,19 @@ function StatsSheet({ visible, state, onClose }) {
   );
 }
 
-// ===== Kateqoriya idarəçisi =====
 function CategorySheet({ visible, state, onClose, catApi, onDelCat, onDelSub, onClearAll }) {
-  const [q, setQ] = useState('');
-  const [open, setOpen] = useState(null);
-  const [newSub, setNewSub] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [nName, setNName] = useState(''); const [nIcon, setNIcon] = useState(EMOJI_SET[0]); const [nColor, setNColor] = useState(COLOR_SET[0]);
+  const [q, setQ] = useState(''); const [open, setOpen] = useState(null); const [newSub, setNewSub] = useState('');
+  const [creating, setCreating] = useState(false); const [nName, setNName] = useState(''); const [nIcon, setNIcon] = useState(EMOJI_SET[0]); const [nColor, setNColor] = useState(COLOR_SET[0]);
   const cats = Object.keys(state.categories).filter((c) => c.toLowerCase().includes(q.toLowerCase()));
   function createCat() { if (!nName.trim()) { Alert.alert('Ad lazımdır'); return; } if (catApi.addCategory(nName, nIcon, nColor)) { setCreating(false); setNName(''); } else Alert.alert('Bu ad artıq var'); }
-  function tryDelCat(c) { const u = catUsage(state, c); Alert.alert('Kateqoriyanı sil?', u > 0 ? `${c} — ${u} əməliyyatda istifadə olunur. Yenə də silinsin? (əməliyyatlar qalacaq)` : `${c} silinsin?`, [{ text: 'İmtina', style: 'cancel' }, { text: 'Sil', style: 'destructive', onPress: () => { animate(); onDelCat(c); } }]); }
+  function tryDelCat(c) { const u = catUsage(state, c); Alert.alert('Kateqoriyanı sil?', u > 0 ? `${c} — ${u} əməliyyatda var. Silinsin? (əməliyyatlar qalacaq)` : `${c} silinsin?`, [{ text: 'İmtina', style: 'cancel' }, { text: 'Sil', style: 'destructive', onPress: () => { animate(); onDelCat(c); } }]); }
   return (
     <Sheet visible={visible} onClose={onClose} title="🗂️ Kateqoriyalar">
       {creating ? (
         <View style={styles.formCard}>
           <TextInput style={styles.input2} placeholder="Kateqoriya adı" placeholderTextColor="#94a3b8" value={nName} onChangeText={setNName} autoFocus />
           <Text style={styles.miniLabel}>Emoji</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 2 }}>{EMOJI_SET.map((e) => <TouchableOpacity key={e} onPress={() => setNIcon(e)} style={[styles.emojiBtn, nIcon === e && { borderColor: '#0EA5E9', backgroundColor: '#eff6ff' }]}><Text style={{ fontSize: 20 }}>{e}</Text></TouchableOpacity>)}</ScrollView>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 2 }}>{EMOJI_SET.map((e) => <TouchableOpacity key={e} onPress={() => setNIcon(e)} style={[styles.emojiBtn, nIcon === e && { borderColor: '#0EA5E9', backgroundColor: '#eff6ff' }]}><Text style={{ fontSize: 19 }}>{e}</Text></TouchableOpacity>)}</ScrollView>
           <Text style={styles.miniLabel}>Rəng</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>{COLOR_SET.map((c) => <TouchableOpacity key={c} onPress={() => setNColor(c)} style={[styles.colorBtn, { backgroundColor: c }, nColor === c && styles.colorActive]} />)}</ScrollView>
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
@@ -573,34 +604,24 @@ function CategorySheet({ visible, state, onClose, catApi, onDelCat, onDelSub, on
         <>
           <TextInput style={styles.search} placeholder="🔍 Axtar..." placeholderTextColor="#94a3b8" value={q} onChangeText={setQ} />
           <TouchableOpacity style={styles.createRow} onPress={() => setCreating(true)}><Text style={styles.createRowText}>➕  Yeni kateqoriya yarat</Text></TouchableOpacity>
-          {Object.keys(state.categories).length > 0 ? (
-            <TouchableOpacity style={styles.clearAllRow} onPress={() => Alert.alert('Bütün kateqoriyaları sil?', 'Hamısı silinəcək (əməliyyatlar qalacaq).', [{ text: 'İmtina', style: 'cancel' }, { text: 'Hamısını sil', style: 'destructive', onPress: onClearAll }])}>
-              <Text style={styles.clearAllText}>🗑️  Bütün kateqoriyaları sil</Text>
-            </TouchableOpacity>
-          ) : null}
+          {Object.keys(state.categories).length > 0 ? <TouchableOpacity style={styles.clearAllRow} onPress={() => Alert.alert('Bütün kateqoriyaları sil?', 'Hamısı silinəcək (əməliyyatlar qalacaq).', [{ text: 'İmtina', style: 'cancel' }, { text: 'Hamısını sil', style: 'destructive', onPress: onClearAll }])}><Text style={styles.clearAllText}>🗑️  Bütün kateqoriyaları sil</Text></TouchableOpacity> : null}
           {cats.length === 0 ? <Text style={styles.emptyMini}>Kateqoriya yoxdur — yuxarıdan yarat</Text> : null}
-          {cats.map((c) => {
-            const meta = state.categories[c]; const isOpen = open === c; const subs = meta.subs || [];
-            return (
-              <View key={c} style={styles.catCard}>
-                <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }} onPress={() => { animate(); setOpen(isOpen ? null : c); }}>
-                  <View style={[styles.catDot, { backgroundColor: meta.color + '22' }]}><Text style={{ fontSize: 16 }}>{meta.icon}</Text></View>
-                  <View style={{ flex: 1 }}><Text style={styles.liTitle}>{c}</Text><Text style={styles.liSub}>{subs.length} alt · {catUsage(state, c)} əməliyyat</Text></View>
-                  <TouchableOpacity onPress={() => tryDelCat(c)} hitSlop={8}><Text>🗑️</Text></TouchableOpacity>
-                  <Text style={styles.pickerChevron}>{isOpen ? '▾' : '▸'}</Text>
-                </TouchableOpacity>
-                {isOpen && (
-                  <View style={{ marginTop: 8 }}>
-                    {subs.map((sc) => <View key={sc} style={styles.subManageRow}><Text style={styles.subRowText}>{sc}</Text><TouchableOpacity onPress={() => { animate(); onDelSub(c, sc); }} hitSlop={8}><Text style={{ fontSize: 13 }}>✕</Text></TouchableOpacity></View>)}
-                    <View style={styles.addSubRow}>
-                      <TextInput style={styles.addSubInput} placeholder="Yeni alt..." placeholderTextColor="#94a3b8" value={open === c ? newSub : ''} onChangeText={setNewSub} />
-                      <TouchableOpacity style={styles.addSubBtn} onPress={() => { if (catApi.addSub(c, newSub)) setNewSub(''); }}><Text style={{ color: '#fff', fontWeight: '800' }}>＋</Text></TouchableOpacity>
-                    </View>
-                  </View>
-                )}
-              </View>
-            );
-          })}
+          {cats.map((c) => { const meta = state.categories[c]; const isOpen = open === c; const subs = meta.subs || []; return (
+            <View key={c} style={styles.catCard}>
+              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }} onPress={() => { animate(); setOpen(isOpen ? null : c); }}>
+                <View style={[styles.catDot, { backgroundColor: meta.color + '22' }]}><Text style={{ fontSize: 15 }}>{meta.icon}</Text></View>
+                <View style={{ flex: 1 }}><Text style={styles.liTitle}>{c}</Text><Text style={styles.liSub}>{subs.length} alt · {catUsage(state, c)} əməliyyat</Text></View>
+                <TouchableOpacity onPress={() => tryDelCat(c)} hitSlop={8}><Text>🗑️</Text></TouchableOpacity>
+                <Text style={styles.pickerChevron}>{isOpen ? '▾' : '▸'}</Text>
+              </TouchableOpacity>
+              {isOpen && (
+                <View style={{ marginTop: 8 }}>
+                  {subs.map((sc) => <View key={sc} style={styles.subManageRow}><Text style={styles.subRowText}>{sc}</Text><TouchableOpacity onPress={() => { animate(); onDelSub(c, sc); }} hitSlop={8}><Text style={{ fontSize: 13 }}>✕</Text></TouchableOpacity></View>)}
+                  <View style={styles.addSubRow}><TextInput style={styles.addSubInput} placeholder="Yeni alt..." placeholderTextColor="#94a3b8" value={open === c ? newSub : ''} onChangeText={setNewSub} /><TouchableOpacity style={styles.addSubBtn} onPress={() => { if (catApi.addSub(c, newSub)) setNewSub(''); }}><Text style={{ color: '#fff', fontWeight: '800' }}>＋</Text></TouchableOpacity></View>
+                </View>
+              )}
+            </View>
+          ); })}
         </>
       )}
       <View style={{ height: 12 }} />
@@ -640,142 +661,163 @@ function SettingsSheet({ visible, state, onClose, onSetCash, onReset, onOpenCats
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f1f5f9' },
   center: { alignItems: 'center', justifyContent: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingTop: 60, paddingHorizontal: 18, paddingBottom: 4 },
-  appTitle: { color: '#0f172a', fontSize: 20, fontWeight: '800' },
-  appSub: { color: '#94a3b8', fontSize: 11, fontWeight: '700', letterSpacing: 1, marginTop: 2 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', paddingTop: 58, paddingHorizontal: 18, paddingBottom: 4 },
+  appTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
+  appSub: { color: '#94a3b8', fontSize: 10, fontWeight: '700', letterSpacing: 1, marginTop: 2 },
   iconRow: { flexDirection: 'row', gap: 6 },
-  hIcon: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
-  sysMsg: { flexDirection: 'row', alignItems: 'center', gap: 12, margin: 18, marginBottom: 10, backgroundColor: '#fff', borderRadius: 18, padding: 14, borderWidth: 1, borderColor: '#e2e8f0' },
-  sysIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#ede9fe', alignItems: 'center', justifyContent: 'center' },
-  sysLabel: { color: '#7c3aed', fontSize: 11, fontWeight: '800', letterSpacing: 1 },
-  sysText: { color: '#334155', fontSize: 14, marginTop: 2 },
+  hIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  sysMsg: { flexDirection: 'row', alignItems: 'center', gap: 11, margin: 16, marginBottom: 8, backgroundColor: '#fff', borderRadius: 16, padding: 13, borderWidth: 1, borderColor: '#e2e8f0' },
+  sysIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#ede9fe', alignItems: 'center', justifyContent: 'center' },
+  sysLabel: { color: '#7c3aed', fontSize: 10, fontWeight: '800', letterSpacing: 1 },
+  sysText: { color: '#334155', fontSize: 13, marginTop: 2 },
   sectionTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginTop: 6 },
-  sectionTitle: { color: '#0f172a', fontSize: 22, fontWeight: '800' },
-  sectionSub: { color: '#94a3b8', fontSize: 13, marginTop: 2 },
-  liveBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#ecfdf5', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6 },
-  liveDot: { color: '#16a34a', fontSize: 9 },
-  liveText: { color: '#16a34a', fontSize: 12, fontWeight: '700' },
-  hero: { margin: 18, marginBottom: 12, borderRadius: 24, padding: 22 },
-  heroTop: { color: 'rgba(255,255,255,0.9)', fontSize: 13, fontWeight: '700', letterSpacing: 0.5 },
-  heroAmount: { color: '#fff', fontSize: 40, fontWeight: '900', marginTop: 6 },
-  heroBottom: { color: 'rgba(255,255,255,0.92)', fontSize: 14, fontWeight: '600', marginTop: 8 },
+  sectionTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
+  sectionSub: { color: '#94a3b8', fontSize: 12, marginTop: 2 },
+  liveBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#ecfdf5', borderRadius: 20, paddingHorizontal: 11, paddingVertical: 5 },
+  liveDot: { color: '#16a34a', fontSize: 8 },
+  liveText: { color: '#16a34a', fontSize: 11, fontWeight: '700' },
+  hero: { margin: 16, marginBottom: 12, borderRadius: 22, padding: 20 },
+  heroTop: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
+  heroAmount: { color: '#fff', fontSize: 34, fontWeight: '900', marginTop: 6 },
+  heroBottom: { color: 'rgba(255,255,255,0.92)', fontSize: 13, fontWeight: '600', marginTop: 8 },
   gridPad: { paddingHorizontal: 14, gap: 10 },
   row2: { flexDirection: 'row', gap: 10 },
   row3: { flexDirection: 'row', gap: 10 },
-  statCard: { backgroundColor: '#fff', borderRadius: 18, padding: 14, borderWidth: 1 },
+  statCard: { backgroundColor: '#fff', borderRadius: 16, padding: 13, borderWidth: 1 },
   statHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  statLabel: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
-  statValue: { color: '#0f172a', fontSize: 22, fontWeight: '800', marginTop: 6 },
-  statSub: { color: '#94a3b8', fontSize: 11, marginTop: 3 },
-  alert: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 18, marginTop: 10, padding: 12, borderRadius: 14, borderWidth: 1 },
+  statLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
+  statValue: { color: '#0f172a', fontSize: 18, fontWeight: '800', marginTop: 5 },
+  statSub: { color: '#94a3b8', fontSize: 10, marginTop: 3 },
+  alert: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginTop: 10, padding: 12, borderRadius: 14, borderWidth: 1 },
   alertText: { color: '#334155', fontSize: 13, flex: 1 },
-  addBtn: { backgroundColor: '#0f172a', borderRadius: 18, paddingVertical: 18, alignItems: 'center', marginTop: 6 },
-  addBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },
-  emptyText: { color: '#94a3b8', fontSize: 14, textAlign: 'center', marginTop: 20, paddingHorizontal: 30 },
+  addBtn: { backgroundColor: '#0f172a', borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 6 },
+  addBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  emptyText: { color: '#94a3b8', fontSize: 13, textAlign: 'center', marginTop: 18, paddingHorizontal: 30 },
   secHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 16, paddingBottom: 6 },
-  secDate: { color: '#0f172a', fontSize: 15, fontWeight: '700' },
-  secTotal: { color: '#94a3b8', fontSize: 14, fontWeight: '600' },
-  row: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', marginHorizontal: 16, marginVertical: 4, padding: 12, borderRadius: 16, borderWidth: 1, borderColor: '#e2e8f0' },
-  rowIcon: { width: 42, height: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
-  rowTitle: { color: '#0f172a', fontSize: 15, fontWeight: '600' },
+  secDate: { color: '#0f172a', fontSize: 14, fontWeight: '700' },
+  secTotal: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
+  row: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', marginHorizontal: 16, marginVertical: 4, padding: 11, borderRadius: 15, borderWidth: 1, borderColor: '#e2e8f0' },
+  rowIcon: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', marginRight: 11 },
+  rowTitle: { color: '#0f172a', fontSize: 14, fontWeight: '600' },
   kindBadge: { fontSize: 11, fontWeight: '700' },
   rowNote: { color: '#94a3b8', fontSize: 12, flex: 1 },
-  rowAmount: { color: '#0f172a', fontSize: 16, fontWeight: '700' },
+  rowAmount: { color: '#0f172a', fontSize: 15, fontWeight: '700' },
 
   modalRoot: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,23,42,0.45)' },
-  sheet: { backgroundColor: '#f1f5f9', borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 18, paddingBottom: 26, maxHeight: '92%' },
-  sheetHandle: { alignSelf: 'center', width: 44, height: 5, borderRadius: 3, backgroundColor: '#cbd5e1', marginBottom: 12 },
-  sheetHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  sheetTitle: { color: '#0f172a', fontSize: 20, fontWeight: '800' },
-  sheetClose: { color: '#64748b', fontSize: 20, fontWeight: '700' },
+  kavWrap: { width: '100%' },
+  sheet: { backgroundColor: '#f1f5f9', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, paddingBottom: 24, maxHeight: '92%' },
+  sheetHandle: { alignSelf: 'center', width: 42, height: 5, borderRadius: 3, backgroundColor: '#cbd5e1', marginBottom: 12 },
+  sheetHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  sheetTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
+  sheetClose: { color: '#64748b', fontSize: 19, fontWeight: '700' },
 
-  formHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
-  formTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
+  formHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  formTitle: { color: '#0f172a', fontSize: 17, fontWeight: '800' },
   cancelLink: { color: '#64748b', fontSize: 14, fontWeight: '600' },
   amountBox: { flexDirection: 'row', alignItems: 'center', borderBottomWidth: 2, borderBottomColor: '#0EA5E9', paddingBottom: 8 },
-  amountCur: { color: '#64748b', fontSize: 26, fontWeight: '700', marginRight: 8 },
-  amountInput: { flex: 1, color: '#0f172a', fontSize: 34, fontWeight: '800', padding: 0 },
+  amountCur: { color: '#64748b', fontSize: 24, fontWeight: '700', marginRight: 8 },
+  amountInput: { flex: 1, color: '#0f172a', fontSize: 30, fontWeight: '800', padding: 0 },
   stepper: { width: 28, height: 20, alignItems: 'center', justifyContent: 'center' },
   stepperT: { color: '#94a3b8', fontSize: 11 },
-  fLabel: { color: '#64748b', fontSize: 12, fontWeight: '800', letterSpacing: 0.5, marginTop: 18, marginBottom: 8 },
-  dropdown: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 14, borderWidth: 1, borderColor: '#e2e8f0' },
-  ddIcon: { fontSize: 16 },
-  ddText: { flex: 1, color: '#0f172a', fontSize: 15, fontWeight: '600' },
-  ddChevron: { color: '#94a3b8', fontSize: 14 },
+  fLabel: { color: '#64748b', fontSize: 11, fontWeight: '800', letterSpacing: 0.5, marginTop: 16, marginBottom: 8 },
+  dropdown: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', borderRadius: 13, paddingVertical: 13, paddingHorizontal: 14, borderWidth: 1, borderColor: '#e2e8f0' },
+  ddIcon: { fontSize: 15 },
+  ddText: { flex: 1, color: '#0f172a', fontSize: 14, fontWeight: '600' },
+  ddChevron: { color: '#94a3b8', fontSize: 13 },
   kindRow: { flexDirection: 'row', gap: 8 },
-  kindBtn: { flex: 1, alignItems: 'center', backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#e2e8f0', borderRadius: 14, paddingVertical: 12 },
-  kindMain: { color: '#334155', fontSize: 14, fontWeight: '700' },
-  kindSub: { color: '#94a3b8', fontSize: 10, marginTop: 2 },
-  noteInput: { backgroundColor: '#fff', color: '#0f172a', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 14, fontSize: 15, borderWidth: 1, borderColor: '#e2e8f0' },
-  confirmBtn: { backgroundColor: '#0EA5E9', borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 18 },
-  confirmText: { color: '#fff', fontSize: 16, fontWeight: '800' },
-  delLink: { alignItems: 'center', paddingVertical: 14 },
+  kindBtn: { flex: 1, alignItems: 'center', backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#e2e8f0', borderRadius: 13, paddingVertical: 11 },
+  kindMain: { color: '#334155', fontSize: 13, fontWeight: '700' },
+  kindSub: { color: '#94a3b8', fontSize: 9, marginTop: 2 },
+  noteInput: { backgroundColor: '#fff', color: '#0f172a', borderRadius: 13, paddingVertical: 13, paddingHorizontal: 14, fontSize: 14, borderWidth: 1, borderColor: '#e2e8f0' },
+  confirmBtn: { backgroundColor: '#0EA5E9', borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 16 },
+  confirmText: { color: '#fff', fontSize: 15, fontWeight: '800' },
+  delLink: { alignItems: 'center', paddingVertical: 13 },
   delLinkText: { color: '#dc2626', fontSize: 14, fontWeight: '700' },
 
-  pickerBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 22 },
-  pickerCard: { backgroundColor: '#fff', borderRadius: 22, padding: 16, maxHeight: '82%' },
-  pickerTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
-  search: { backgroundColor: '#f1f5f9', borderRadius: 12, paddingVertical: 11, paddingHorizontal: 14, fontSize: 15, color: '#0f172a', marginBottom: 10 },
-  createRow: { backgroundColor: '#eff6ff', borderRadius: 12, paddingVertical: 13, alignItems: 'center', marginBottom: 8, borderWidth: 1, borderColor: '#bfdbfe' },
-  createRowText: { color: '#2563eb', fontSize: 14, fontWeight: '800' },
-  clearAllRow: { backgroundColor: '#fef2f2', borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginBottom: 10, borderWidth: 1, borderColor: '#fecaca' },
-  clearAllText: { color: '#dc2626', fontSize: 13, fontWeight: '800' },
+  centerBackdrop: { flex: 1, backgroundColor: 'rgba(15,23,42,0.5)', justifyContent: 'center', padding: 22 },
+  pickerCard: { backgroundColor: '#fff', borderRadius: 20, padding: 15, maxHeight: '80%' },
+  pickerTitle: { color: '#0f172a', fontSize: 17, fontWeight: '800' },
+  search: { backgroundColor: '#f1f5f9', borderRadius: 11, paddingVertical: 10, paddingHorizontal: 13, fontSize: 14, color: '#0f172a', marginBottom: 10 },
+  createRow: { backgroundColor: '#eff6ff', borderRadius: 11, paddingVertical: 12, alignItems: 'center', marginBottom: 8, borderWidth: 1, borderColor: '#bfdbfe' },
+  createRowText: { color: '#2563eb', fontSize: 13, fontWeight: '800' },
+  clearAllRow: { backgroundColor: '#fef2f2', borderRadius: 11, paddingVertical: 11, alignItems: 'center', marginBottom: 10, borderWidth: 1, borderColor: '#fecaca' },
+  clearAllText: { color: '#dc2626', fontSize: 12, fontWeight: '800' },
   pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  catDot: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  pickerLabel: { flex: 1, color: '#0f172a', fontSize: 16, fontWeight: '600' },
-  pickerChevron: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
-  subWrap: { paddingLeft: 16, paddingBottom: 8, backgroundColor: '#f8fafc' },
-  subRow: { paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#eef2f7' },
-  subRowText: { color: '#475569', fontSize: 15 },
-  addSubRow: { flexDirection: 'row', gap: 8, marginTop: 8, alignItems: 'center' },
+  catDot: { width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  pickerLabel: { flex: 1, color: '#0f172a', fontSize: 15, fontWeight: '600' },
+  pickerChevron: { color: '#94a3b8', fontSize: 12, fontWeight: '600' },
+  subRowText: { color: '#475569', fontSize: 14 },
+  addSubRow: { flexDirection: 'row', gap: 8, marginTop: 10, alignItems: 'center' },
   addSubInput: { flex: 1, backgroundColor: '#fff', borderRadius: 10, paddingVertical: 9, paddingHorizontal: 12, fontSize: 14, borderWidth: 1, borderColor: '#e2e8f0', color: '#0f172a' },
   addSubBtn: { width: 40, height: 38, borderRadius: 10, backgroundColor: '#0EA5E9', alignItems: 'center', justifyContent: 'center' },
-  miniLabel: { color: '#64748b', fontSize: 12, fontWeight: '700', marginTop: 12, marginBottom: 6 },
-  emojiBtn: { width: 44, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' },
-  colorBtn: { width: 34, height: 34, borderRadius: 17 },
+  miniLabel: { color: '#64748b', fontSize: 11, fontWeight: '700', marginTop: 12, marginBottom: 6 },
+  emojiBtn: { width: 42, height: 42, borderRadius: 11, borderWidth: 1.5, borderColor: '#e2e8f0', alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc' },
+  colorBtn: { width: 32, height: 32, borderRadius: 16 },
   colorActive: { borderWidth: 3, borderColor: '#0f172a' },
 
-  input2: { backgroundColor: '#fff', color: '#0f172a', borderRadius: 12, paddingVertical: 13, paddingHorizontal: 14, fontSize: 16, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 10 },
-  formCard: { backgroundColor: '#fff', borderRadius: 18, padding: 16, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 14 },
+  input2: { backgroundColor: '#fff', color: '#0f172a', borderRadius: 11, paddingVertical: 12, paddingHorizontal: 13, fontSize: 15, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 10 },
+  formCard: { backgroundColor: '#fff', borderRadius: 16, padding: 14, borderWidth: 1, borderColor: '#e2e8f0', marginBottom: 12 },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6, marginBottom: 6 },
-  switchLabel: { color: '#334155', fontSize: 15, fontWeight: '600' },
-  dateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 14, padding: 8, borderWidth: 1, borderColor: '#e2e8f0' },
-  dateArrow: { width: 46, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9' },
-  dateArrowT: { color: '#334155', fontSize: 15 },
-  dateVal: { color: '#0f172a', fontSize: 15, fontWeight: '700' },
-  li: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#e2e8f0' },
-  liTitle: { color: '#0f172a', fontSize: 15, fontWeight: '600' },
+  switchLabel: { color: '#334155', fontSize: 14, fontWeight: '600' },
+  dateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff', borderRadius: 13, padding: 7, borderWidth: 1, borderColor: '#e2e8f0' },
+  dateArrow: { width: 44, height: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9' },
+  dateArrowT: { color: '#334155', fontSize: 14 },
+  dateVal: { color: '#0f172a', fontSize: 14, fontWeight: '700' },
+  rangeWrap: { marginTop: 14 },
+  rangeChip: { backgroundColor: '#fff', borderRadius: 20, paddingVertical: 8, paddingHorizontal: 15, borderWidth: 1, borderColor: '#e2e8f0' },
+  rangeChipA: { backgroundColor: '#0f172a', borderColor: '#0f172a' },
+  rangeChipT: { color: '#64748b', fontSize: 13, fontWeight: '700' },
+  rangeChipTA: { color: '#fff' },
+  rangeSummary: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginTop: 12, marginBottom: 2 },
+  rangeSumLabel: { color: '#0f172a', fontSize: 15, fontWeight: '800' },
+  rangeSumVal: { color: '#64748b', fontSize: 13, fontWeight: '600' },
+  calCard: { backgroundColor: '#fff', borderRadius: 20, padding: 16 },
+  calHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  calNavBtn: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#f1f5f9', alignItems: 'center', justifyContent: 'center' },
+  calNav: { color: '#0f172a', fontSize: 20, fontWeight: '800' },
+  calTitle: { color: '#0f172a', fontSize: 16, fontWeight: '800' },
+  calWeek: { flexDirection: 'row' },
+  calWeekT: { width: '14.2857%', textAlign: 'center', color: '#94a3b8', fontSize: 11, fontWeight: '700', paddingBottom: 6 },
+  calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  calCell: { width: '14.2857%', aspectRatio: 1, alignItems: 'center', justifyContent: 'center', padding: 2 },
+  calDay: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  calDayToday: { borderWidth: 1.5, borderColor: '#0EA5E9' },
+  calDaySel: { backgroundColor: '#0EA5E9' },
+  calDayT: { color: '#0f172a', fontSize: 14, fontWeight: '600' },
+  calTodayBtn: { marginTop: 10, backgroundColor: '#f1f5f9', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  calTodayBtnT: { color: '#0EA5E9', fontSize: 14, fontWeight: '800' },
+  li: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', borderRadius: 13, padding: 11, marginBottom: 8, borderWidth: 1, borderColor: '#e2e8f0' },
+  liTitle: { color: '#0f172a', fontSize: 14, fontWeight: '600' },
   liSub: { color: '#94a3b8', fontSize: 12, marginTop: 2 },
-  liAmount: { color: '#0f172a', fontSize: 15, fontWeight: '700' },
-  miniBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
+  liAmount: { color: '#0f172a', fontSize: 14, fontWeight: '700' },
+  miniBtn: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9 },
   emptyMini: { color: '#94a3b8', fontSize: 13, textAlign: 'center', paddingVertical: 16 },
 
-  segment: { flexDirection: 'row', backgroundColor: '#e2e8f0', borderRadius: 12, padding: 4, marginBottom: 14 },
-  segBtn: { flex: 1, paddingVertical: 9, borderRadius: 9, alignItems: 'center' },
+  segment: { flexDirection: 'row', backgroundColor: '#e2e8f0', borderRadius: 11, padding: 4, marginBottom: 12 },
+  segBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
   segActive: { backgroundColor: '#fff' },
-  segText: { color: '#64748b', fontSize: 13, fontWeight: '700' },
+  segText: { color: '#64748b', fontSize: 12, fontWeight: '700' },
   segTextA: { color: '#0f172a' },
   sumRow: { flexDirection: 'row', gap: 10 },
-  sumCard: { flex: 1, backgroundColor: '#fff', borderRadius: 14, padding: 12, borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' },
-  sumLabel: { color: '#94a3b8', fontSize: 12 },
-  sumVal: { fontSize: 16, fontWeight: '800', marginTop: 4 },
+  sumCard: { flex: 1, backgroundColor: '#fff', borderRadius: 13, padding: 11, borderWidth: 1, borderColor: '#e2e8f0', alignItems: 'center' },
+  sumLabel: { color: '#94a3b8', fontSize: 11 },
+  sumVal: { fontSize: 15, fontWeight: '800', marginTop: 4 },
   miniNote: { color: '#94a3b8', fontSize: 12, textAlign: 'center', marginTop: 8 },
-  statH: { color: '#0EA5E9', fontSize: 14, fontWeight: '800', marginTop: 18, marginBottom: 12 },
+  statH: { color: '#0EA5E9', fontSize: 13, fontWeight: '800', marginTop: 16, marginBottom: 12 },
   tapHint: { color: '#94a3b8', fontSize: 11, fontWeight: '600' },
   crumb: { paddingVertical: 8 },
-  crumbText: { color: '#2563eb', fontSize: 14, fontWeight: '700' },
+  crumbText: { color: '#2563eb', fontSize: 13, fontWeight: '700' },
   barLabel: { color: '#334155', fontSize: 13, fontWeight: '600' },
-  barVal: { color: '#64748b', fontSize: 12, fontWeight: '600' },
-  barTrack: { height: 10, borderRadius: 6, backgroundColor: '#e2e8f0', overflow: 'hidden' },
-  barFill: { height: 10, borderRadius: 6 },
+  barVal: { color: '#64748b', fontSize: 12, fontWeight: '700' },
+  barTrack: { height: 9, borderRadius: 5, backgroundColor: '#e2e8f0', overflow: 'hidden' },
+  barFill: { height: 9, borderRadius: 5 },
   topRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
-
-  catCard: { backgroundColor: '#fff', borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#e2e8f0' },
-  subManageRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, paddingLeft: 44, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  navRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: '#e2e8f0' },
-  navIcon: { fontSize: 20 },
-  navText: { flex: 1, color: '#0f172a', fontSize: 15, fontWeight: '600' },
+  catCard: { backgroundColor: '#fff', borderRadius: 13, padding: 11, marginBottom: 8, borderWidth: 1, borderColor: '#e2e8f0' },
+  subManageRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, paddingLeft: 42, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  navRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 13, padding: 15, marginBottom: 12, borderWidth: 1, borderColor: '#e2e8f0' },
+  navIcon: { fontSize: 19 },
+  navText: { flex: 1, color: '#0f172a', fontSize: 14, fontWeight: '600' },
   hintTxt: { color: '#94a3b8', fontSize: 12, marginBottom: 10, lineHeight: 17 },
-  dangerBtn: { backgroundColor: '#fef2f2', borderRadius: 14, paddingVertical: 15, alignItems: 'center', borderWidth: 1, borderColor: '#fecaca' },
-  dangerText: { color: '#dc2626', fontSize: 15, fontWeight: '800' },
+  dangerBtn: { backgroundColor: '#fef2f2', borderRadius: 13, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: '#fecaca' },
+  dangerText: { color: '#dc2626', fontSize: 14, fontWeight: '800' },
 });
