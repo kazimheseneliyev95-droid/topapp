@@ -25,14 +25,23 @@ export const KINDS = {
   wasteful: { key: 'wasteful', label: 'İsraf', icon: '🔥', color: '#f43f5e' },
 };
 
+// Yeni kateqoriya yaradarkən emoji/rəng seçimi
+export const EMOJI_SET = ['🍔', '🛒', '🚗', '🏠', '🎮', '💊', '💳', '🏷️', '✈️', '🎁', '👕', '📱', '💡', '🐶', '📚', '☕', '🍺', '💅', '⚽', '🎬', '🧾', '💰', '🛠️', '🚌', '⛽', '🏥', '🎓', '💼', '🏦', '🌐', '🎵', '🍕', '🚬', '🌸', '👶', '🧹'];
+export const COLOR_SET = ['#f97316', '#3b82f6', '#ec4899', '#14b8a6', '#8b5cf6', '#06b6d4', '#f43f5e', '#64748b', '#22c55e', '#eab308', '#6366f1', '#ef4444', '#0ea5e9', '#d946ef'];
+
+export function catUsage(state, name) { return (state.transactions || []).filter((t) => t.category === name).length; }
+export function subUsage(state, name, sub) { return (state.transactions || []).filter((t) => t.category === name && t.subCategory === sub).length; }
+export const STATE_VERSION = 2;
+
 export function emptyState() {
   return {
+    version: STATE_VERSION,
     startingBalance: 0,
     transactions: [],
     incomes: [],
     debts: [],
     futureExpenses: [],
-    categories: DEFAULT_CATEGORIES,
+    categories: {},
     user: null,
   };
 }
@@ -46,7 +55,7 @@ export async function loadState() {
       return {
         ...emptyState(),
         ...s,
-        categories: s.categories && Object.keys(s.categories).length ? s.categories : DEFAULT_CATEGORIES,
+        categories: s.categories || {},
       };
     }
   } catch (e) {}
@@ -92,6 +101,25 @@ export function money(n) {
   return `${sep},${d}`;
 }
 export function parseAmount(s) { const n = parseFloat(String(s).replace(',', '.')); return isNaN(n) ? 0 : n; }
+// XERCLEMAPP formatı: maks 1 onluq, minlik ayırıcı; "AZN ..." prefiksi
+export function fmt(n) {
+  let v = Number(n) || 0;
+  const neg = v < 0; v = Math.abs(v);
+  let str = v.toFixed(1);
+  if (str.endsWith('.0')) str = str.slice(0, -2);
+  const [int, dec] = str.split('.');
+  const sep = int.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return (neg ? '-' : '') + sep + (dec ? ',' + dec : '');
+}
+export function azn(n) { return 'AZN ' + fmt(n); }
+// Sistem mesajı (XERCLEMAPP-dakı AI feedback yerine kontekstual mesaj)
+export function systemMessage(ov, stats) {
+  if (ov.cash <= 0) return 'Pulun bitib. Gəlir əlavə et və ya xərcləri dayandır.';
+  if (ov.projectedMonthEnd < 0) return 'Bu ayın öhdəliklərindən sonra balansın mənfiyə düşür — ehtiyatlı ol.';
+  if (stats.wastefulTotal > 0 && stats.wastefulTotal >= stats.essentialTotal) return 'İsraf xərclərin vacibdən çoxdur — qənaət şansı var.';
+  if (ov.cashRunway < 999 && ov.cashRunway <= 7) return `Diqqət: nağdın təxminən ${ov.cashRunway} gün davam edəcək.`;
+  return `Gündəlik təhlükəsiz limitin ${azn(ov.dailySafeLimit)}. Yaxşı gedirsən!`;
+}
 export function catMeta(state, name) {
   const c = (state.categories || DEFAULT_CATEGORIES)[name];
   return c || { icon: '🏷️', color: '#64748b', subs: [] };
@@ -140,6 +168,35 @@ export function calculateStats(s) {
       return lm > 0 ? ((tm - lm) / lm) * 100 : 0;
     })(),
   };
+}
+
+// Dövr üzrə qabaqcıl statistika (gün/həftə/ay/hamısı + alt kateqoriya)
+export function periodRange(period) {
+  const today = todayYmd();
+  const now = new Date();
+  if (period === 'today') return { start: today, end: today };
+  if (period === 'week') return { start: ymd(addDays(now, -6)), end: today };
+  if (period === 'month') return { start: today.slice(0, 7) + '-01', end: today };
+  return { start: '0000-00-00', end: '9999-99-99' };
+}
+export function periodStats(state, period) {
+  const { start, end } = periodRange(period);
+  const txs = (state.transactions || []).filter((t) => t.category !== DEBT_PAYMENT_CAT && t.date >= start && t.date <= end);
+  const total = txs.reduce((a, t) => a + t.amount, 0);
+  const categoryBreakdown = {};
+  const subBreakdown = {};
+  for (const t of txs) {
+    categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
+    const key = t.subCategory || '(altsız)';
+    subBreakdown[t.category] = subBreakdown[t.category] || {};
+    subBreakdown[t.category][key] = (subBreakdown[t.category][key] || 0) + t.amount;
+  }
+  const essential = txs.filter((t) => t.isEssential).reduce((a, t) => a + t.amount, 0);
+  const wasteful = txs.filter((t) => t.isWasteful).reduce((a, t) => a + t.amount, 0);
+  const standard = total - essential - wasteful;
+  const incomeTotal = (state.incomes || []).filter((i) => i.isReceived && i.date >= start && i.date <= end).reduce((a, i) => a + i.amount, 0);
+  const top = txs.slice().sort((a, b) => b.amount - a.amount).slice(0, 6);
+  return { total, count: txs.length, avg: txs.length ? total / txs.length : 0, categoryBreakdown, subBreakdown, essential, standard, wasteful, incomeTotal, top, txs };
 }
 
 // Finansal projeksiyon + uyarilar
