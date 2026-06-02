@@ -130,23 +130,16 @@ function Dashboard({ state, commit, update }) {
           </View>
         </View>
 
+        <View style={styles.filterBar}>
+          <Text style={styles.filterLabel}>📆 Dövr</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 16 }}>
+            {RANGES.map((r) => <TouchableOpacity key={r.k} onPress={() => setRange(r.k)} style={[styles.rangeChip, range === r.k && styles.rangeChipA]}><Text style={[styles.rangeChipT, range === r.k && styles.rangeChipTA]}>{r.l}</Text></TouchableOpacity>)}
+          </ScrollView>
+        </View>
+
         <View style={styles.sysMsg}>
           <View style={styles.sysIcon}><Text style={{ fontSize: 15 }}>📈</Text></View>
           <View style={{ flex: 1 }}><Text style={styles.sysLabel}>SİSTEM MESAJI</Text><Text style={styles.sysText}>{sysMsg}</Text></View>
-        </View>
-
-        <View style={styles.sectionTop}>
-          <View><Text style={styles.sectionTitle}>Maliyyə İcmalı</Text><Text style={styles.sectionSub}>Bu ay üçün ümumi vəziyyət</Text></View>
-          <View style={styles.liveBadge}><Text style={styles.liveDot}>●</Text><Text style={styles.liveText}>Canlı</Text></View>
-        </View>
-
-        <View style={[styles.hero, { backgroundColor: heroColor }]}>
-          <Text style={styles.heroTop}>👛  İNDİKİ PUL</Text>
-          <Text style={styles.heroAmount}>{azn(ov.cash)}</Text>
-          <View style={styles.heroRow}>
-            <View style={styles.heroChip}><Text style={styles.heroChipL}>Günlük güvənli limit</Text><Text style={styles.heroChipV}>{azn(ov.dailySafeLimit)}</Text></View>
-            <View style={styles.heroChip}><Text style={styles.heroChipL}>Nağd ömrü</Text><Text style={styles.heroChipV}>{ov.cashRunway >= 999 ? '∞' : ov.cashRunway + ' gün'}</Text></View>
-          </View>
         </View>
 
         {alerts.map((a, i) => (
@@ -156,37 +149,32 @@ function Dashboard({ state, commit, update }) {
           </View>
         ))}
 
+        <View style={[styles.hero, { backgroundColor: heroColor }]}>
+          <Text style={styles.heroTop}>👛  İNDİKİ PUL</Text>
+          <Text style={styles.heroAmount}>{azn(ov.cash)}</Text>
+          <View style={styles.heroRow}>
+            <View style={styles.heroChip}><Text style={styles.heroChipL}>{rb.label} xərc</Text><Text style={styles.heroChipV}>{azn(rs.total)}</Text></View>
+            <View style={styles.heroChip}><Text style={styles.heroChipL}>Günlük güvənli limit</Text><Text style={styles.heroChipV}>{azn(ov.dailySafeLimit)}</Text></View>
+          </View>
+        </View>
+
         <View style={styles.gridPad}>
           <View style={styles.row2}>
-            <StatCard icon="📈" label="AY SONUNA (bu ay)" value={azn(ov.projectedMonthEnd)} sub="proyeksiya" tint={ov.projectedMonthEnd < 0 ? 'red' : 'green'} flex />
-            <StatCard icon="🛡️" label="VACIB TƏMINAT" value={`${ov.essentialCoverage.toFixed(0)}%`} sub={ov.essentialNeeded > 0 ? `lazım ${azn(ov.essentialNeeded)}` : 'öhdəlik yox'} tint={ov.essentialCoverage >= 100 ? 'green' : 'yellow'} flex />
+            <StatCard icon="📅" label="GÜNDƏLİK ORTA" value={azn(rs.avgDaily)} sub={`${rs.count} əməliyyat`} tint="blue" flex />
+            <StatCard icon="💰" label="GƏLİR (dövr)" value={azn(rs.incomeTotal || 0)} sub={`net ${azn((rs.incomeTotal || 0) - rs.total)}`} tint="green" flex />
           </View>
-        </View>
-
-        <View style={styles.rangeWrap}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
-            {RANGES.map((r) => <TouchableOpacity key={r.k} onPress={() => setRange(r.k)} style={[styles.rangeChip, range === r.k && styles.rangeChipA]}><Text style={[styles.rangeChipT, range === r.k && styles.rangeChipTA]}>{r.l}</Text></TouchableOpacity>)}
-          </ScrollView>
-        </View>
-
-        <View style={[styles.hero, { backgroundColor: '#0f172a', marginTop: 6 }]}>
-          <Text style={styles.heroTop}>📊  {rb.label.toUpperCase()} — XƏRC</Text>
-          <Text style={styles.heroAmount}>{azn(rs.total)}</Text>
-          <View style={styles.heroRow}>
-            <View style={styles.heroChip}><Text style={styles.heroChipL}>Gündəlik orta</Text><Text style={styles.heroChipV}>{azn(rs.avgDaily)}</Text></View>
-            <View style={styles.heroChip}><Text style={styles.heroChipL}>Əməliyyat</Text><Text style={styles.heroChipV}>{rs.count}</Text></View>
-          </View>
-        </View>
-
-        <View style={styles.gridPad}>
           <View style={styles.row3}>
             <StatCard icon="🛡️" label="VACIB" value={azn(rs.essential)} sub={`${rs.total ? Math.round(rs.essential / rs.total * 100) : 0}%`} tint="red" flex small />
             <StatCard icon="🛒" label="STANDART" value={azn(rs.standard)} sub={`${rs.total ? Math.round(rs.standard / rs.total * 100) : 0}%`} tint="yellow" flex small />
             <StatCard icon="🔥" label="İSRAF" value={azn(rs.wasteful)} sub={`${rs.total ? Math.round(rs.wasteful / rs.total * 100) : 0}%`} tint="orange" flex small />
           </View>
+          <View style={styles.row2}>
+            <StatCard icon="📈" label="AY SONUNA" value={azn(ov.projectedMonthEnd)} sub="bu ay proyeksiya" tint={ov.projectedMonthEnd < 0 ? 'red' : 'green'} flex />
+            <StatCard icon="🛡️" label="VACIB TƏMINAT" value={`${ov.essentialCoverage.toFixed(0)}%`} sub={ov.essentialNeeded > 0 ? `lazım ${azn(ov.essentialNeeded)}` : 'öhdəlik yox'} tint={ov.essentialCoverage >= 100 ? 'green' : 'yellow'} flex />
+          </View>
         </View>
 
-        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+        <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
           <TouchableOpacity style={styles.addBtn} onPress={() => setFormTx({})} activeOpacity={0.85}><Text style={styles.addBtnText}>＋  Xərc Əlavə Et</Text></TouchableOpacity>
         </View>
 
@@ -673,6 +661,8 @@ const styles = StyleSheet.create({
   appTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
   appSub: { color: '#94a3b8', fontSize: 10, fontWeight: '700', letterSpacing: 1, marginTop: 2 },
   iconRow: { flexDirection: 'row', gap: 6 },
+  filterBar: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 },
+  filterLabel: { color: '#0f172a', fontSize: 13, fontWeight: '800' },
   hIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   sysMsg: { flexDirection: 'row', alignItems: 'center', gap: 11, margin: 16, marginBottom: 8, backgroundColor: '#fff', borderRadius: 16, padding: 13, borderWidth: 1, borderColor: '#e2e8f0' },
   sysIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#ede9fe', alignItems: 'center', justifyContent: 'center' },

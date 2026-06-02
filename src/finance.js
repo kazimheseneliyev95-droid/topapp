@@ -228,7 +228,8 @@ export function statsForRange(state, range) {
   const days = Math.max(1, Math.round((parseYmd(s) - parseYmd(end)) / -86400000) + 1);
   const categoryBreakdown = {};
   for (const t of txs) categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
-  return { total, essential, standard, wasteful, count: txs.length, avgDaily: total / days, days, categoryBreakdown };
+  const incomeTotal = (state.incomes || []).filter((i) => i.isReceived && i.date >= start && i.date <= end).reduce((a, i) => a + (Number(i.amount) || 0), 0);
+  return { total, essential, standard, wasteful, count: txs.length, avgDaily: total / days, days, categoryBreakdown, incomeTotal };
 }
 
 // Finansal projeksiyon + uyarilar
