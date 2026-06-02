@@ -130,13 +130,6 @@ function Dashboard({ state, commit, update }) {
           </View>
         </View>
 
-        <View style={styles.filterBar}>
-          <Text style={styles.filterLabel}>📆 Dövr</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingRight: 16 }}>
-            {RANGES.map((r) => <TouchableOpacity key={r.k} onPress={() => setRange(r.k)} style={[styles.rangeChip, range === r.k && styles.rangeChipA]}><Text style={[styles.rangeChipT, range === r.k && styles.rangeChipTA]}>{r.l}</Text></TouchableOpacity>)}
-          </ScrollView>
-        </View>
-
         <View style={styles.sysMsg}>
           <View style={styles.sysIcon}><Text style={{ fontSize: 15 }}>📈</Text></View>
           <View style={{ flex: 1 }}><Text style={styles.sysLabel}>SİSTEM MESAJI</Text><Text style={styles.sysText}>{sysMsg}</Text></View>
@@ -193,7 +186,7 @@ function Dashboard({ state, commit, update }) {
       <FutureSheet visible={sheet === 'future'} state={state} onClose={() => setSheet(null)} onAdd={addFuture} onDelete={delFuture} />
       <IncomeSheet visible={sheet === 'income'} state={state} onClose={() => setSheet(null)} onAdd={addIncome} onDelete={delIncome} onToggle={toggleIncome} />
       <StatsSheet visible={sheet === 'stats'} state={state} onClose={() => setSheet(null)} />
-      <SettingsSheet visible={sheet === 'settings'} state={state} onClose={() => setSheet(null)} onSetCash={setCash} onReset={resetAll} onOpenCats={() => setSheet('cats')} onRestore={restore} />
+      <SettingsSheet visible={sheet === 'settings'} state={state} range={range} onSetRange={setRange} onClose={() => setSheet(null)} onSetCash={setCash} onReset={resetAll} onOpenCats={() => setSheet('cats')} onRestore={restore} />
       <CategorySheet visible={sheet === 'cats'} state={state} onClose={() => setSheet('settings')} catApi={catApi} onDelCat={delCategory} onDelSub={delSub} onClearAll={clearCats} />
     </View>
   );
@@ -625,11 +618,18 @@ function CategorySheet({ visible, state, onClose, catApi, onDelCat, onDelSub, on
   );
 }
 
-function SettingsSheet({ visible, state, onClose, onSetCash, onReset, onOpenCats, onRestore }) {
+function SettingsSheet({ visible, state, range, onSetRange, onClose, onSetCash, onReset, onOpenCats, onRestore }) {
   const [cash, setCash] = useState('');
   function apply() { const amt = parseAmount(cash); onSetCash(amt); setCash(''); Alert.alert('Tamam', `İndiki pul ${azn(amt)} olaraq təyin edildi.`); }
   return (
     <Sheet visible={visible} onClose={onClose} title="⚙️ Tənzimləmələr">
+      <View style={styles.formCard}>
+        <Text style={styles.fLabel}>ƏSAS EKRAN DÖVRÜ</Text>
+        <Text style={styles.hintTxt}>Ana ekran seçilmiş dövrə görə göstərilir (yadda saxlanılır).</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {RANGES.map((r) => <TouchableOpacity key={r.k} onPress={() => onSetRange(r.k)} style={[styles.rangeChip, range === r.k && styles.rangeChipA]}><Text style={[styles.rangeChipT, range === r.k && styles.rangeChipTA]}>{r.l}</Text></TouchableOpacity>)}
+        </View>
+      </View>
       <TouchableOpacity style={styles.navRow} onPress={onOpenCats}><Text style={styles.navIcon}>🗂️</Text><Text style={styles.navText}>Kateqoriyaları idarə et</Text><Text style={styles.pickerChevron}>›</Text></TouchableOpacity>
       <View style={styles.formCard}>
         <Text style={styles.fLabel}>YEDƏK (BACKUP)</Text>
