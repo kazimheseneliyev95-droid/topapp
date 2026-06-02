@@ -9,7 +9,7 @@ import {
   emptyState, loadState, saveState, uid, ymd, todayYmd, parseYmd, addDays,
   dateLabel, shortDate, fmt, azn, parseAmount, catMeta, kindOf, catUsage,
   currentCash, calculateStats, overview, buildAlerts, systemMessage, periodStats,
-  daysInMonth, MONTHS_AZ, WEEKDAYS_AZ, rangeBounds,
+  daysInMonth, MONTHS_AZ, WEEKDAYS_AZ, rangeBounds, statsForRange,
 } from './src/finance';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -101,6 +101,7 @@ function Dashboard({ state, commit, update }) {
 
   const range = state.defaultRange || 'month';
   const rb = useMemo(() => rangeBounds(range), [range]);
+  const rs = useMemo(() => statsForRange(state, range), [state, range]);
   const setRange = (r) => update({ defaultRange: r });
   const sections = useMemo(() => {
     const inRange = state.transactions.filter((e) => e.date >= rb.start && e.date <= rb.end);
@@ -142,24 +143,9 @@ function Dashboard({ state, commit, update }) {
         <View style={[styles.hero, { backgroundColor: heroColor }]}>
           <Text style={styles.heroTop}>👛  İNDİKİ PUL</Text>
           <Text style={styles.heroAmount}>{azn(ov.cash)}</Text>
-          <Text style={styles.heroBottom}>{ov.cash <= 0 ? '⏳  Pul bitib — gəlir əlavə et' : `⏳  ${ov.cashRunway >= 999 ? 'uzun müddət' : ov.cashRunway + ' gün'} davam edəcək`}</Text>
-        </View>
-
-        <View style={styles.gridPad}>
-          <View style={styles.row2}>
-            <StatCard icon="📈" label="AY SONUNA" value={azn(ov.projectedMonthEnd)} sub="proyeksiya" tint={ov.projectedMonthEnd < 0 ? 'red' : 'green'} flex />
-            <StatCard icon="📅" label="GÜNDƏLİK ORTA" value={azn(ov.avgDaily)} sub="son 30 günün ortası" tint="blue" flex />
-          </View>
-          <View style={styles.row3}>
-            <StatCard icon="🛡️" label="VACIB" value={azn(stats.essentialTotal)} sub="məcburi" tint="red" flex small />
-            <StatCard icon="🛒" label="STANDART" value={azn(stats.standardTotal)} sub="adi gündəlik" tint="yellow" flex small />
-            <StatCard icon="🔥" label="İSRAF" value={azn(stats.wastefulTotal)} sub="qənaət şansı" tint="orange" flex small />
-          </View>
-          <StatCard icon="🛡️" label="VACIB TƏMINAT" value={`${ov.essentialCoverage.toFixed(0)}%`} sub={ov.essentialNeeded > 0 ? `lazım ${azn(ov.essentialNeeded)}` : 'Vacib ödəniş yoxdur'} tint={ov.essentialCoverage >= 100 ? 'green' : 'yellow'} />
-          <View style={styles.row3}>
-            <StatCard icon="🎯" label="GÜNLÜK LIMIT" value={azn(ov.dailySafeLimit)} tint="purple" flex small />
-            <StatCard icon="📆" label="BU GÜN" value={azn(stats.today)} tint="yellow" flex small />
-            <StatCard icon="👛" label="İNDIYƏ QƏDƏR" value={azn(stats.thisMonth)} tint="slate" flex small />
+          <View style={styles.heroRow}>
+            <View style={styles.heroChip}><Text style={styles.heroChipL}>Günlük güvənli limit</Text><Text style={styles.heroChipV}>{azn(ov.dailySafeLimit)}</Text></View>
+            <View style={styles.heroChip}><Text style={styles.heroChipL}>Nağd ömrü</Text><Text style={styles.heroChipV}>{ov.cashRunway >= 999 ? '∞' : ov.cashRunway + ' gün'}</Text></View>
           </View>
         </View>
 
@@ -170,8 +156,11 @@ function Dashboard({ state, commit, update }) {
           </View>
         ))}
 
-        <View style={{ paddingHorizontal: 16, marginTop: 8 }}>
-          <TouchableOpacity style={styles.addBtn} onPress={() => setFormTx({})} activeOpacity={0.85}><Text style={styles.addBtnText}>＋  Xərc Əlavə Et</Text></TouchableOpacity>
+        <View style={styles.gridPad}>
+          <View style={styles.row2}>
+            <StatCard icon="📈" label="AY SONUNA (bu ay)" value={azn(ov.projectedMonthEnd)} sub="proyeksiya" tint={ov.projectedMonthEnd < 0 ? 'red' : 'green'} flex />
+            <StatCard icon="🛡️" label="VACIB TƏMINAT" value={`${ov.essentialCoverage.toFixed(0)}%`} sub={ov.essentialNeeded > 0 ? `lazım ${azn(ov.essentialNeeded)}` : 'öhdəlik yox'} tint={ov.essentialCoverage >= 100 ? 'green' : 'yellow'} flex />
+          </View>
         </View>
 
         <View style={styles.rangeWrap}>
@@ -179,10 +168,29 @@ function Dashboard({ state, commit, update }) {
             {RANGES.map((r) => <TouchableOpacity key={r.k} onPress={() => setRange(r.k)} style={[styles.rangeChip, range === r.k && styles.rangeChipA]}><Text style={[styles.rangeChipT, range === r.k && styles.rangeChipTA]}>{r.l}</Text></TouchableOpacity>)}
           </ScrollView>
         </View>
-        <View style={styles.rangeSummary}>
-          <Text style={styles.rangeSumLabel}>{rb.label}</Text>
-          <Text style={styles.rangeSumVal}>{azn(rangeTotal)}  ·  {rangeCount} əməliyyat</Text>
+
+        <View style={[styles.hero, { backgroundColor: '#0f172a', marginTop: 6 }]}>
+          <Text style={styles.heroTop}>📊  {rb.label.toUpperCase()} — XƏRC</Text>
+          <Text style={styles.heroAmount}>{azn(rs.total)}</Text>
+          <View style={styles.heroRow}>
+            <View style={styles.heroChip}><Text style={styles.heroChipL}>Gündəlik orta</Text><Text style={styles.heroChipV}>{azn(rs.avgDaily)}</Text></View>
+            <View style={styles.heroChip}><Text style={styles.heroChipL}>Əməliyyat</Text><Text style={styles.heroChipV}>{rs.count}</Text></View>
+          </View>
         </View>
+
+        <View style={styles.gridPad}>
+          <View style={styles.row3}>
+            <StatCard icon="🛡️" label="VACIB" value={azn(rs.essential)} sub={`${rs.total ? Math.round(rs.essential / rs.total * 100) : 0}%`} tint="red" flex small />
+            <StatCard icon="🛒" label="STANDART" value={azn(rs.standard)} sub={`${rs.total ? Math.round(rs.standard / rs.total * 100) : 0}%`} tint="yellow" flex small />
+            <StatCard icon="🔥" label="İSRAF" value={azn(rs.wasteful)} sub={`${rs.total ? Math.round(rs.wasteful / rs.total * 100) : 0}%`} tint="orange" flex small />
+          </View>
+        </View>
+
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+          <TouchableOpacity style={styles.addBtn} onPress={() => setFormTx({})} activeOpacity={0.85}><Text style={styles.addBtnText}>＋  Xərc Əlavə Et</Text></TouchableOpacity>
+        </View>
+
+        <Text style={styles.listHeading}>{rb.label} — hərəkətlər ({rangeCount})</Text>
 
         {sections.length === 0 ? <Text style={styles.emptyText}>Bu aralıqda xərc yoxdur.</Text> : sections.map((sec) => (
           <View key={sec.date}>
@@ -680,6 +688,11 @@ const styles = StyleSheet.create({
   heroTop: { color: 'rgba(255,255,255,0.9)', fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
   heroAmount: { color: '#fff', fontSize: 34, fontWeight: '900', marginTop: 6 },
   heroBottom: { color: 'rgba(255,255,255,0.92)', fontSize: 13, fontWeight: '600', marginTop: 8 },
+  heroRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  heroChip: { flex: 1, backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 13, padding: 11 },
+  heroChipL: { color: 'rgba(255,255,255,0.85)', fontSize: 11 },
+  heroChipV: { color: '#fff', fontSize: 16, fontWeight: '800', marginTop: 2 },
+  listHeading: { color: '#0f172a', fontSize: 14, fontWeight: '800', marginHorizontal: 20, marginTop: 18, marginBottom: 2 },
   gridPad: { paddingHorizontal: 14, gap: 10 },
   row2: { flexDirection: 'row', gap: 10 },
   row3: { flexDirection: 'row', gap: 10 },

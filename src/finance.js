@@ -215,6 +215,22 @@ export function periodStats(state, period) {
   return { total, count: txs.length, avg: txs.length ? total / txs.length : 0, categoryBreakdown, subBreakdown, essential, standard, wasteful, incomeTotal, top, txs };
 }
 
+// Ana ekran üçün seçilmiş aralıq statistikası (bütün kartlar buna görə)
+export function statsForRange(state, range) {
+  const { start, end } = rangeBounds(range);
+  const txs = (state.transactions || []).filter((t) => t.category !== DEBT_PAYMENT_CAT && t.date >= start && t.date <= end);
+  const total = txs.reduce((a, t) => a + t.amount, 0);
+  const essential = txs.filter((t) => t.isEssential).reduce((a, t) => a + t.amount, 0);
+  const wasteful = txs.filter((t) => t.isWasteful).reduce((a, t) => a + t.amount, 0);
+  const standard = total - essential - wasteful;
+  let s = start;
+  if (range === 'all') { s = end; for (const t of txs) if (t.date < s) s = t.date; }
+  const days = Math.max(1, Math.round((parseYmd(s) - parseYmd(end)) / -86400000) + 1);
+  const categoryBreakdown = {};
+  for (const t of txs) categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
+  return { total, essential, standard, wasteful, count: txs.length, avgDaily: total / days, days, categoryBreakdown };
+}
+
 // Finansal projeksiyon + uyarilar
 export function overview(s) {
   const cash = currentCash(s);
