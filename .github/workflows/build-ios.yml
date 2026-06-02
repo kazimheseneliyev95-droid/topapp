@@ -1,0 +1,75 @@
+name: Build unsigned iOS IPA
+
+# AltStore ile yandan yukleme icin imzasiz bir .ipa uretir.
+# AltStore yuklerken uygulamayi senin (ucretsiz) Apple ID'nle yeniden imzalar,
+# bu yuzden burada imzaya gerek yok.
+
+on:
+  workflow_dispatch: # GitHub > Actions sekmesinden elle calistir
+  push:
+    branches: [main, master]
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      - name: Node.js kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: JS bagimliliklarini yukle
+        run: npm install
+
+      - name: iOS native projesini uret (prebuild)
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: CocoaPods yukle
+        working-directory: ios
+        run: pod install
+
+      - name: Workspace ve scheme adini bul
+        id: xc
+        working-directory: ios
+        run: |
+          PROJ=$(ls -d *.xcodeproj | head -n1 | sed 's/\.xcodeproj$//')
+          echo "scheme=$PROJ" >> "$GITHUB_OUTPUT"
+          echo "workspace=$PROJ.xcworkspace" >> "$GITHUB_OUTPUT"
+          echo "Bulundu -> scheme: $PROJ , workspace: $PROJ.xcworkspace"
+
+      - name: Imzasiz arsiv olustur
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -workspace "${{ steps.xc.outputs.workspace }}" \
+            -scheme "${{ steps.xc.outputs.scheme }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/app.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: .ipa paketle
+        working-directory: ios
+        run: |
+          cd build
+          mkdir -p Payload
+          APP=$(ls -d app.xcarchive/Products/Applications/*.app | head -n1)
+          cp -R "$APP" Payload/
+          zip -r -y topapp.ipa Payload >/dev/null
+          ls -lh topapp.ipa
+
+      - name: .ipa dosyasini yukle (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: topapp-ipa
+          path: ios/build/topapp.ipa
+          if-no-files-found: error
