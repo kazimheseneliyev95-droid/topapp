@@ -62,10 +62,15 @@ export function normalizeState(s) {
   };
 }
 export async function loadState() {
+  let raw = null;
   try {
-    const raw = await AsyncStorage.getItem(STORAGE_KEY);
+    raw = await AsyncStorage.getItem(STORAGE_KEY);
     if (raw) return normalizeState(JSON.parse(raw));
-  } catch (e) { console.warn('XERCLEM loadState:', e && e.message); }
+  } catch (e) {
+    console.warn('XERCLEM loadState (bozuk məlumat):', e && e.message);
+    // Bozuk veriyi ayrı açara qoru — üzərinə yazma, sonra bərpa oluna bilər
+    if (raw) { try { await AsyncStorage.setItem(STORAGE_KEY + '_corrupt', raw); } catch (e2) {} }
+  }
   return emptyState();
 }
 export async function saveState(s) {

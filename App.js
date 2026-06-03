@@ -1,11 +1,11 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, KeyboardAvoidingView, LayoutAnimation, Modal, Platform,
+  ActivityIndicator, Alert, AppState, KeyboardAvoidingView, LayoutAnimation, Modal, Platform,
   Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, UIManager, View,
 } from 'react-native';
 import {
-  DEBT_PAYMENT_CAT, KINDS, EMOJI_SET, COLOR_SET,
+  DEBT_PAYMENT_CAT, KINDS, EMOJI_SET, COLOR_SET, STATE_VERSION,
   emptyState, loadState, saveState, uid, ymd, todayYmd, parseYmd, addDays,
   dateLabel, shortDate, azn, parseAmount, catMeta, kindOf, catUsage,
   currentCash, overview, buildAlerts, systemMessage,
@@ -21,15 +21,18 @@ const stop = (e) => { if (e && e.stopPropagation) e.stopPropagation(); };
 
 async function doExport(state) {
   try {
-    const json = JSON.stringify(state, null, 2);
-    const name = `xerclem-yedek-${todayYmd()}.json`;
+    const d = new Date();
+    const stamp = `${todayYmd()}-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}`;
+    const payload = { app: 'XERCLEM', version: STATE_VERSION, exportedAt: d.toISOString(), data: state };
+    const json = JSON.stringify(payload, null, 2);
+    const name = `xerclem-yedek-${stamp}.json`;
     if (Platform.OS === 'web') {
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url); return;
     }
     const uri = (FileSystem.cacheDirectory || FileSystem.documentDirectory) + name;
     await FileSystem.writeAsStringAsync(uri, json);
-    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json', dialogTitle: 'XƏRCLƏM yedəyi' });
+    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: 'application/json', dialogTitle: 'XƏRCLƏM yedəyi', UTI: 'public.json' });
     else Alert.alert('Paylaşım yoxdur', `Fayl saxlanıldı:\n${uri}`);
   } catch (e) { Alert.alert('Xəta', 'Yedək alınmadı: ' + (e && e.message)); }
 }
@@ -39,9 +42,15 @@ async function doImport(onRestore) {
     if (res.canceled || !res.assets || !res.assets[0]) return;
     let json;
     if (Platform.OS === 'web') { const r = await fetch(res.assets[0].uri); json = await r.text(); } else json = await FileSystem.readAsStringAsync(res.assets[0].uri);
-    const data = JSON.parse(json);
+    const parsed = JSON.parse(json);
+    // Yeni format {app,version,data} həm də köhnə düz state — hər ikisini qəbul et
+    const data = (parsed && parsed.app === 'XERCLEM' && parsed.data) ? parsed.data : parsed;
     if (!data || typeof data !== 'object' || !Array.isArray(data.transactions)) { Alert.alert('Yararsız fayl', 'Bu XƏRCLƏM yedəyi deyil.'); return; }
-    onRestore(data); Alert.alert('Bərpa olundu ✅', 'Məlumatlar geri yükləndi.');
+    const n = data.transactions.length;
+    Alert.alert('Bərpa et?', `Yedəkdə ${n} əməliyyat var.\nMövcud BÜTÜN məlumatların əvəzlənəcək (geri alına bilməz).`, [
+      { text: 'İmtina', style: 'cancel' },
+      { text: 'Bərpa et', style: 'destructive', onPress: () => { onRestore(data); Alert.alert('Bərpa olundu ✅', `${n} əməliyyat geri yükləndi.`); } },
+    ]);
   } catch (e) { Alert.alert('Xəta', 'Bərpa alınmadı: ' + (e && e.message)); }
 }
 
@@ -59,8 +68,20 @@ const RANGES = [{ k: '7', l: 'Son 7 gün' }, { k: '15', l: 'Son 15 gün' }, { k:
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [state, setState] = useState(emptyState());
+  const stateRef = useRef(state);
+  stateRef.current = state;
   useEffect(() => { (async () => { setState(await loadState()); setLoading(false); })(); }, []);
-  useEffect(() => { if (!loading) saveState(state); }, [state, loading]);
+  // Debounce'lu kalıcılık (sıx yazımı birləşdirir, AsyncStorage-i yormur)
+  useEffect(() => {
+    if (loading) return;
+    const t = setTimeout(() => saveState(state), 350);
+    return () => clearTimeout(t);
+  }, [state, loading]);
+  // Tətbiq arxa plana keçəndə dərhal yadda saxla (debounce pəncərəsində itki olmasın)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st) => { if (st !== 'active') saveState(stateRef.current); });
+    return () => sub.remove();
+  }, []);
   const mutate = (fn) => setState((prev) => fn(prev));
   if (loading) return <View style={[styles.root, styles.center]}><StatusBar style="dark" /><ActivityIndicator color="#0EA5E9" size="large" /></View>;
   return <Dashboard state={state} mutate={mutate} />;
