@@ -5,11 +5,11 @@ import {
   Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, UIManager, View,
 } from 'react-native';
 import {
-  DEFAULT_CATEGORIES, DEBT_PAYMENT_CAT, KINDS, EMOJI_SET, COLOR_SET,
+  DEBT_PAYMENT_CAT, KINDS, EMOJI_SET, COLOR_SET,
   emptyState, loadState, saveState, uid, ymd, todayYmd, parseYmd, addDays,
-  dateLabel, shortDate, fmt, azn, parseAmount, catMeta, kindOf, catUsage,
-  currentCash, calculateStats, overview, buildAlerts, systemMessage, periodStats,
-  daysInMonth, MONTHS_AZ, WEEKDAYS_AZ, rangeBounds, statsForRange,
+  dateLabel, shortDate, azn, parseAmount, catMeta, kindOf, catUsage,
+  currentCash, overview, buildAlerts, systemMessage,
+  daysInMonth, MONTHS_AZ, WEEKDAYS_AZ, rangeBounds, statsFor, normalizeState,
 } from './src/finance';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -60,60 +60,69 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [state, setState] = useState(emptyState());
   useEffect(() => { (async () => { setState(await loadState()); setLoading(false); })(); }, []);
-  function commit(next) { setState(next); saveState(next); }
-  const update = (patch) => commit({ ...state, ...patch });
+  useEffect(() => { if (!loading) saveState(state); }, [state, loading]);
+  const mutate = (fn) => setState((prev) => fn(prev));
   if (loading) return <View style={[styles.root, styles.center]}><StatusBar style="dark" /><ActivityIndicator color="#0EA5E9" size="large" /></View>;
-  return <Dashboard state={state} commit={commit} update={update} />;
+  return <Dashboard state={state} mutate={mutate} />;
 }
 
-function Dashboard({ state, commit, update }) {
+function Dashboard({ state, mutate }) {
   const [sheet, setSheet] = useState(null);
   const [formTx, setFormTx] = useState(null);
 
   const ov = useMemo(() => overview(state), [state]);
-  const stats = useMemo(() => calculateStats(state), [state]);
+  const mstats = useMemo(() => statsFor(state, 'month'), [state]);
   const alerts = useMemo(() => buildAlerts(state), [state]);
-  const sysMsg = useMemo(() => systemMessage(ov, stats), [ov, stats]);
+  const sysMsg = useMemo(() => systemMessage(ov, mstats), [ov, mstats]);
 
-  const saveTx = (t) => { animate(); const ex = state.transactions.some((x) => x.id === t.id); update({ transactions: ex ? state.transactions.map((x) => x.id === t.id ? t : x) : [t, ...state.transactions] }); setFormTx(null); };
-  const delTx = (id) => { animate(); update({ transactions: state.transactions.filter((x) => x.id !== id) }); setFormTx(null); };
-  const addIncome = (i) => update({ incomes: [i, ...state.incomes] });
-  const delIncome = (id) => update({ incomes: state.incomes.filter((x) => x.id !== id) });
-  const toggleIncome = (id) => update({ incomes: state.incomes.map((x) => x.id === id ? { ...x, isReceived: !x.isReceived } : x) });
-  const addDebt = (d) => update({ debts: [d, ...state.debts] });
-  const delDebt = (id) => update({ debts: state.debts.filter((x) => x.id !== id) });
-  const payDebt = (d) => {
-    const amt = d.amount - (d.paid || 0); if (amt <= 0) return;
-    if (currentCash(state) < amt) { Alert.alert('Nağd çatmır', 'Bu borcu ödəmək üçün nağdın yetərli deyil.'); return; }
+  const saveTx = (t) => { animate(); mutate((s) => ({ ...s, transactions: s.transactions.some((x) => x.id === t.id) ? s.transactions.map((x) => x.id === t.id ? t : x) : [t, ...s.transactions] })); setFormTx(null); };
+  const delTx = (id) => { animate(); mutate((s) => ({ ...s, transactions: s.transactions.filter((x) => x.id !== id) })); setFormTx(null); };
+  const addIncome = (i) => mutate((s) => ({ ...s, incomes: [i, ...s.incomes] }));
+  const delIncome = (id) => mutate((s) => ({ ...s, incomes: s.incomes.filter((x) => x.id !== id) }));
+  const toggleIncome = (id) => mutate((s) => ({ ...s, incomes: s.incomes.map((x) => x.id === id ? { ...x, isReceived: !x.isReceived } : x) }));
+  const addDebt = (d) => mutate((s) => ({ ...s, debts: [d, ...s.debts] }));
+  const delDebt = (id) => mutate((s) => ({ ...s, debts: s.debts.filter((x) => x.id !== id) }));
+  const payDebt = (d) => mutate((s) => {
+    const amt = d.amount - (d.paid || 0); if (amt <= 0) return s;
+    if (currentCash(s) < amt) { Alert.alert('Nağd çatmır', 'Bu borcu ödəmək üçün nağdın yetərli deyil.'); return s; }
     const tx = { id: uid(), amount: amt, category: DEBT_PAYMENT_CAT, subCategory: '', note: `Borc ödənildi: ${d.title}`, isEssential: true, relatedDebtId: d.id, date: todayYmd(), createdAt: Date.now() };
-    commit({ ...state, transactions: [tx, ...state.transactions], debts: state.debts.map((x) => x.id === d.id ? { ...x, paid: x.amount } : x) });
+    return { ...s, transactions: [tx, ...s.transactions], debts: s.debts.map((x) => x.id === d.id ? { ...x, paid: x.amount } : x) };
+  });
+  const addFuture = (f) => mutate((s) => ({ ...s, futureExpenses: [f, ...s.futureExpenses] }));
+  const delFuture = (id) => mutate((s) => ({ ...s, futureExpenses: s.futureExpenses.filter((x) => x.id !== id) }));
+  const setCash = (target) => mutate((s) => { const inc = s.incomes.filter((i) => i.isReceived).reduce((a, i) => a + (Number(i.amount) || 0), 0); const exp = s.transactions.reduce((a, t) => a + (Number(t.amount) || 0), 0); return { ...s, startingBalance: target - inc + exp }; });
+  const resetAll = () => mutate(() => emptyState());
+  const restore = (data) => mutate(() => normalizeState(data));
+  const clearCats = () => { animate(); mutate((s) => ({ ...s, categories: {} })); };
+  const setRange = (r) => mutate((s) => ({ ...s, defaultRange: r }));
+  const addCategory = (name, icon, color) => { const n = (name || '').trim(); if (!n || state.categories[n]) return false; mutate((s) => ({ ...s, categories: { ...s.categories, [n]: { icon: icon || '🏷️', color: color || '#64748b', subs: [] } } })); return true; };
+  const addSub = (cat, sub) => { const c = state.categories[cat]; const sn = (sub || '').trim(); if (!c || !sn || (c.subs || []).includes(sn)) return false; mutate((s) => { const cc = s.categories[cat]; if (!cc) return s; return { ...s, categories: { ...s.categories, [cat]: { ...cc, subs: [...(cc.subs || []), sn] } } }; }); return true; };
+  const delCategory = (name) => mutate((s) => { const c = { ...s.categories }; delete c[name]; return { ...s, categories: c }; });
+  const delSub = (cat, sub) => mutate((s) => { const c = s.categories[cat]; if (!c) return s; return { ...s, categories: { ...s.categories, [cat]: { ...c, subs: (c.subs || []).filter((x) => x !== sub) } } }; });
+  const editCategory = (oldName, newName, icon, color) => {
+    const nn = (newName || '').trim(); const meta = state.categories[oldName];
+    if (!nn || !meta || (nn !== oldName && state.categories[nn])) return false;
+    mutate((s) => {
+      const cats = { ...s.categories }; const m = cats[oldName]; if (!m) return s;
+      if (nn !== oldName) { delete cats[oldName]; cats[nn] = { ...m, icon: icon || m.icon, color: color || m.color }; return { ...s, categories: cats, transactions: s.transactions.map((t) => t.category === oldName ? { ...t, category: nn } : t) }; }
+      cats[oldName] = { ...m, icon: icon || m.icon, color: color || m.color }; return { ...s, categories: cats };
+    });
+    return true;
   };
-  const addFuture = (f) => update({ futureExpenses: [f, ...state.futureExpenses] });
-  const delFuture = (id) => update({ futureExpenses: state.futureExpenses.filter((x) => x.id !== id) });
-  const setCash = (target) => { const inc = state.incomes.filter((i) => i.isReceived).reduce((a, i) => a + i.amount, 0); const exp = state.transactions.reduce((a, t) => a + t.amount, 0); update({ startingBalance: target - inc + exp }); };
-  const resetAll = () => commit(emptyState());
-  const restore = (data) => commit({ ...emptyState(), ...data });
-  const clearCats = () => { animate(); update({ categories: {} }); };
-  const addCategory = (name, icon, color) => { const n = name.trim(); if (!n || state.categories[n]) return false; update({ categories: { ...state.categories, [n]: { icon: icon || '🏷️', color: color || '#64748b', subs: [] } } }); return true; };
-  const addSub = (cat, sub) => { const c = state.categories[cat]; const s = sub.trim(); if (!c || !s || (c.subs || []).includes(s)) return false; update({ categories: { ...state.categories, [cat]: { ...c, subs: [...(c.subs || []), s] } } }); return true; };
-  const delCategory = (name) => { const c = { ...state.categories }; delete c[name]; update({ categories: c }); };
-  const delSub = (cat, sub) => { const c = state.categories[cat]; if (!c) return; update({ categories: { ...state.categories, [cat]: { ...c, subs: c.subs.filter((s) => s !== sub) } } }); };
 
   const range = state.defaultRange || 'month';
   const rb = useMemo(() => rangeBounds(range), [range]);
-  const rs = useMemo(() => statsForRange(state, range), [state, range]);
-  const setRange = (r) => update({ defaultRange: r });
+  const rs = useMemo(() => statsFor(state, range), [state, range]);
   const sections = useMemo(() => {
-    const inRange = state.transactions.filter((e) => e.date >= rb.start && e.date <= rb.end);
+    const inRange = state.transactions.filter((e) => e.date && e.date >= rb.start && e.date <= rb.end);
     const byDate = {};
     for (const e of inRange) (byDate[e.date] = byDate[e.date] || []).push(e);
-    return Object.keys(byDate).sort((a, b) => b.localeCompare(a)).map((date) => ({ date, total: byDate[date].reduce((a, t) => a + t.amount, 0), items: byDate[date].slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) }));
+    return Object.keys(byDate).sort((a, b) => b.localeCompare(a)).map((date) => ({ date, total: byDate[date].reduce((a, t) => a + (Number(t.amount) || 0), 0), items: byDate[date].slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) }));
   }, [state.transactions, rb]);
-  const rangeTotal = useMemo(() => state.transactions.filter((e) => e.category !== DEBT_PAYMENT_CAT && e.date >= rb.start && e.date <= rb.end).reduce((a, t) => a + t.amount, 0), [state.transactions, rb]);
   const rangeCount = sections.reduce((a, s) => a + s.items.length, 0);
 
   const heroColor = ov.cash > 0 ? '#16a34a' : '#dc2626';
-  const catApi = { addCategory, addSub };
+  const catApi = { addCategory, addSub, editCategory };
 
   return (
     <View style={styles.root}>
@@ -359,21 +368,24 @@ function CategoryPickerModal({ visible, state, catApi, onClose, onPick }) {
 function SubPickerModal({ visible, state, cat, catApi, onClose, onPick }) {
   const [newSub, setNewSub] = useState('');
   const subs = ((state.categories[cat] || { subs: [] }).subs) || [];
-  function createSub() { if (catApi.addSub(cat, newSub)) { const s = newSub.trim(); setNewSub(''); onPick(s); } else Alert.alert('Yararsız və ya təkrar'); }
+  // əlavə et və BAĞLAMA — yeni alt kateqoriya aşağıdakı siyahıda dərhal görünür
+  function createSub() { if (catApi.addSub(cat, newSub)) setNewSub(''); else Alert.alert('Yararsız və ya təkrar alt kateqoriya'); }
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.centerBackdrop} onPress={onClose}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ width: '100%' }}>
           <Pressable style={styles.pickerCard} onPress={stop}>
             <View style={styles.formHead}><Text style={styles.pickerTitle}>Alt kateqoriya</Text><TouchableOpacity onPress={onClose}><Text style={styles.cancelLink}>Bağla</Text></TouchableOpacity></View>
-            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
-              <TouchableOpacity style={styles.pickerRow} onPress={() => onPick('')}><Text style={[styles.pickerLabel, { color: '#64748b' }]}>Ümumi (Seçilməyib)</Text></TouchableOpacity>
-              {subs.map((s) => <TouchableOpacity key={s} style={styles.pickerRow} onPress={() => onPick(s)}><Text style={styles.pickerLabel}>{s}</Text></TouchableOpacity>)}
-            </ScrollView>
             <View style={styles.addSubRow}>
-              <TextInput style={styles.addSubInput} placeholder="Yeni alt kateqoriya..." placeholderTextColor="#94a3b8" value={newSub} onChangeText={setNewSub} />
+              <TextInput style={styles.addSubInput} placeholder="Yeni alt kateqoriya yaz..." placeholderTextColor="#94a3b8" value={newSub} onChangeText={setNewSub} onSubmitEditing={createSub} returnKeyType="done" />
               <TouchableOpacity style={styles.addSubBtn} onPress={createSub}><Text style={{ color: '#fff', fontWeight: '800' }}>＋</Text></TouchableOpacity>
             </View>
+            <Text style={styles.miniLabel}>{subs.length} alt kateqoriya — birini seç</Text>
+            <ScrollView style={{ maxHeight: 300 }} keyboardShouldPersistTaps="handled">
+              <TouchableOpacity style={styles.pickerRow} onPress={() => onPick('')}><Text style={[styles.pickerLabel, { color: '#64748b' }]}>Ümumi (Seçilməyib)</Text></TouchableOpacity>
+              {subs.map((sName) => <TouchableOpacity key={sName} style={styles.pickerRow} onPress={() => onPick(sName)}><Text style={styles.pickerLabel}>{sName}</Text><Text style={styles.pickerChevron}>seç ›</Text></TouchableOpacity>)}
+              {subs.length === 0 ? <Text style={styles.emptyMini}>Hələ alt kateqoriya yoxdur — yuxarıdan yarat</Text> : null}
+            </ScrollView>
           </Pressable>
         </KeyboardAvoidingView>
       </Pressable>
@@ -410,6 +422,7 @@ function DateStepper({ date, setDate, maxToday }) {
 }
 function CalendarModal({ visible, value, maxToday, onClose, onPick }) {
   const [view, setView] = useState(value || new Date());
+  useEffect(() => { if (visible) setView(value || new Date()); }, [visible]);
   const y = view.getFullYear(), m = view.getMonth();
   const startWeekday = (new Date(y, m, 1).getDay() + 6) % 7;
   const dim = daysInMonth(y, m);
@@ -520,12 +533,11 @@ function FutureSheet({ visible, state, onClose, onAdd, onDelete }) {
   );
 }
 
-const PERIODS = [{ k: 'today', l: 'Bu gün' }, { k: 'week', l: 'Həftə' }, { k: 'month', l: 'Bu ay' }, { k: 'all', l: 'Hamısı' }];
 function StatsSheet({ visible, state, onClose }) {
   const [period, setPeriod] = useState('month');
   const [drillCat, setDrillCat] = useState(null);
   const [drillSub, setDrillSub] = useState(null);
-  const ps = useMemo(() => periodStats(state, period), [state, period]);
+  const ps = useMemo(() => statsFor(state, period), [state, period]);
   const pc = (v) => ps.total ? Math.round((v / ps.total) * 100) : 0;
   const catE = Object.entries(ps.categoryBreakdown).sort((a, b) => b[1] - a[1]);
   const maxC = Math.max(1, ...catE.map((e) => e[1]));
@@ -534,7 +546,7 @@ function StatsSheet({ visible, state, onClose }) {
   function reset() { setDrillCat(null); setDrillSub(null); }
   return (
     <Sheet visible={visible} onClose={() => { reset(); onClose(); }} title="📊 Statistika">
-      <View style={styles.segment}>{PERIODS.map((p) => <TouchableOpacity key={p.k} onPress={() => { setPeriod(p.k); reset(); }} style={[styles.segBtn, period === p.k && styles.segActive]}><Text style={[styles.segText, period === p.k && styles.segTextA]}>{p.l}</Text></TouchableOpacity>)}</View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 12 }}>{RANGES.map((p) => <TouchableOpacity key={p.k} onPress={() => { setPeriod(p.k); reset(); }} style={[styles.rangeChip, period === p.k && styles.rangeChipA]}><Text style={[styles.rangeChipT, period === p.k && styles.rangeChipTA]}>{p.l}</Text></TouchableOpacity>)}</ScrollView>
       <View style={styles.sumRow}>
         <View style={styles.sumCard}><Text style={styles.sumLabel}>Xərc</Text><Text style={[styles.sumVal, { color: '#dc2626' }]}>{azn(ps.total)}</Text></View>
         <View style={styles.sumCard}><Text style={styles.sumLabel}>Gəlir</Text><Text style={[styles.sumVal, { color: '#16a34a' }]}>{azn(ps.incomeTotal)}</Text></View>
@@ -571,38 +583,51 @@ function StatsSheet({ visible, state, onClose }) {
 
 function CategorySheet({ visible, state, onClose, catApi, onDelCat, onDelSub, onClearAll }) {
   const [q, setQ] = useState(''); const [open, setOpen] = useState(null); const [newSub, setNewSub] = useState('');
-  const [creating, setCreating] = useState(false); const [nName, setNName] = useState(''); const [nIcon, setNIcon] = useState(EMOJI_SET[0]); const [nColor, setNColor] = useState(COLOR_SET[0]);
+  const [creating, setCreating] = useState(false); const [editingName, setEditingName] = useState(null);
+  const [nName, setNName] = useState(''); const [nIcon, setNIcon] = useState(EMOJI_SET[0]); const [nColor, setNColor] = useState(COLOR_SET[0]);
   const cats = Object.keys(state.categories).filter((c) => c.toLowerCase().includes(q.toLowerCase()));
-  function createCat() { if (!nName.trim()) { Alert.alert('Ad lazımdır'); return; } if (catApi.addCategory(nName, nIcon, nColor)) { setCreating(false); setNName(''); } else Alert.alert('Bu ad artıq var'); }
+  function startCreate() { setEditingName(null); setNName(''); setNIcon(EMOJI_SET[0]); setNColor(COLOR_SET[0]); setCreating(true); }
+  function startEdit(c) { const m = state.categories[c]; setEditingName(c); setNName(c); setNIcon(m.icon); setNColor(m.color); setCreating(true); }
+  function cancelForm() { setCreating(false); setEditingName(null); setNName(''); }
+  function saveCat() {
+    if (!nName.trim()) { Alert.alert('Ad lazımdır'); return; }
+    const ok = editingName ? catApi.editCategory(editingName, nName, nIcon, nColor) : catApi.addCategory(nName, nIcon, nColor);
+    if (ok) cancelForm(); else Alert.alert('Bu ad artıq var');
+  }
   function tryDelCat(c) { const u = catUsage(state, c); Alert.alert('Kateqoriyanı sil?', u > 0 ? `${c} — ${u} əməliyyatda var. Silinsin? (əməliyyatlar qalacaq)` : `${c} silinsin?`, [{ text: 'İmtina', style: 'cancel' }, { text: 'Sil', style: 'destructive', onPress: () => { animate(); onDelCat(c); } }]); }
   return (
     <Sheet visible={visible} onClose={onClose} title="🗂️ Kateqoriyalar">
       {creating ? (
         <View style={styles.formCard}>
-          <TextInput style={styles.input2} placeholder="Kateqoriya adı" placeholderTextColor="#94a3b8" value={nName} onChangeText={setNName} autoFocus />
-          <Text style={styles.miniLabel}>Emoji</Text>
+          <Text style={styles.formTitle}>{editingName ? 'Kateqoriyanı düzəlt' : 'Yeni kateqoriya'}</Text>
+          <TextInput style={[styles.input2, { marginTop: 10 }]} placeholder="Kateqoriya adı" placeholderTextColor="#94a3b8" value={nName} onChangeText={setNName} autoFocus />
+          <Text style={styles.miniLabel}>Emoji (şəkil)</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 2 }}>{EMOJI_SET.map((e) => <TouchableOpacity key={e} onPress={() => setNIcon(e)} style={[styles.emojiBtn, nIcon === e && { borderColor: '#0EA5E9', backgroundColor: '#eff6ff' }]}><Text style={{ fontSize: 19 }}>{e}</Text></TouchableOpacity>)}</ScrollView>
           <Text style={styles.miniLabel}>Rəng</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 2 }}>{COLOR_SET.map((c) => <TouchableOpacity key={c} onPress={() => setNColor(c)} style={[styles.colorBtn, { backgroundColor: c }, nColor === c && styles.colorActive]} />)}</ScrollView>
+          {editingName ? <Text style={styles.hintTxt}>Adı dəyişsən, bu kateqoriyadakı bütün xərclər avtomatik yenilənir.</Text> : null}
           <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
-            <TouchableOpacity style={[styles.confirmBtn, { flex: 1, backgroundColor: '#e2e8f0', marginTop: 0 }]} onPress={() => setCreating(false)}><Text style={[styles.confirmText, { color: '#334155' }]}>Geri</Text></TouchableOpacity>
-            <TouchableOpacity style={[styles.confirmBtn, { flex: 2, marginTop: 0 }]} onPress={createCat}><Text style={styles.confirmText}>Yarat</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.confirmBtn, { flex: 1, backgroundColor: '#e2e8f0', marginTop: 0 }]} onPress={cancelForm}><Text style={[styles.confirmText, { color: '#334155' }]}>Geri</Text></TouchableOpacity>
+            <TouchableOpacity style={[styles.confirmBtn, { flex: 2, marginTop: 0 }]} onPress={saveCat}><Text style={styles.confirmText}>{editingName ? 'Yadda saxla' : 'Yarat'}</Text></TouchableOpacity>
           </View>
         </View>
       ) : (
         <>
           <TextInput style={styles.search} placeholder="🔍 Axtar..." placeholderTextColor="#94a3b8" value={q} onChangeText={setQ} />
-          <TouchableOpacity style={styles.createRow} onPress={() => setCreating(true)}><Text style={styles.createRowText}>➕  Yeni kateqoriya yarat</Text></TouchableOpacity>
+          <TouchableOpacity style={styles.createRow} onPress={startCreate}><Text style={styles.createRowText}>➕  Yeni kateqoriya yarat</Text></TouchableOpacity>
           {Object.keys(state.categories).length > 0 ? <TouchableOpacity style={styles.clearAllRow} onPress={() => Alert.alert('Bütün kateqoriyaları sil?', 'Hamısı silinəcək (əməliyyatlar qalacaq).', [{ text: 'İmtina', style: 'cancel' }, { text: 'Hamısını sil', style: 'destructive', onPress: onClearAll }])}><Text style={styles.clearAllText}>🗑️  Bütün kateqoriyaları sil</Text></TouchableOpacity> : null}
           {cats.length === 0 ? <Text style={styles.emptyMini}>Kateqoriya yoxdur — yuxarıdan yarat</Text> : null}
           {cats.map((c) => { const meta = state.categories[c]; const isOpen = open === c; const subs = meta.subs || []; return (
             <View key={c} style={styles.catCard}>
-              <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }} onPress={() => { animate(); setOpen(isOpen ? null : c); }}>
-                <View style={[styles.catDot, { backgroundColor: meta.color + '22' }]}><Text style={{ fontSize: 15 }}>{meta.icon}</Text></View>
-                <View style={{ flex: 1 }}><Text style={styles.liTitle}>{c}</Text><Text style={styles.liSub}>{subs.length} alt · {catUsage(state, c)} əməliyyat</Text></View>
-                <TouchableOpacity onPress={() => tryDelCat(c)} hitSlop={8}><Text>🗑️</Text></TouchableOpacity>
-                <Text style={styles.pickerChevron}>{isOpen ? '▾' : '▸'}</Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <TouchableOpacity style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }} onPress={() => { animate(); setOpen(isOpen ? null : c); }}>
+                  <View style={[styles.catDot, { backgroundColor: meta.color + '22' }]}><Text style={{ fontSize: 15 }}>{meta.icon}</Text></View>
+                  <View style={{ flex: 1 }}><Text style={styles.liTitle}>{c}</Text><Text style={styles.liSub}>{subs.length} alt · {catUsage(state, c)} əməliyyat</Text></View>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => startEdit(c)} hitSlop={8}><Text style={{ fontSize: 16 }}>✏️</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => tryDelCat(c)} hitSlop={8}><Text style={{ fontSize: 16 }}>🗑️</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => { animate(); setOpen(isOpen ? null : c); }} hitSlop={6}><Text style={styles.pickerChevron}>{isOpen ? '▾' : '▸'}</Text></TouchableOpacity>
+              </View>
               {isOpen && (
                 <View style={{ marginTop: 8 }}>
                   {subs.map((sc) => <View key={sc} style={styles.subManageRow}><Text style={styles.subRowText}>{sc}</Text><TouchableOpacity onPress={() => { animate(); onDelSub(c, sc); }} hitSlop={8}><Text style={{ fontSize: 13 }}>✕</Text></TouchableOpacity></View>)}

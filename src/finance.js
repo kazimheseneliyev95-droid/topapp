@@ -30,7 +30,6 @@ export const EMOJI_SET = ['🍔', '🛒', '🚗', '🏠', '🎮', '💊', '💳'
 export const COLOR_SET = ['#f97316', '#3b82f6', '#ec4899', '#14b8a6', '#8b5cf6', '#06b6d4', '#f43f5e', '#64748b', '#22c55e', '#eab308', '#6366f1', '#ef4444', '#0ea5e9', '#d946ef'];
 
 export function catUsage(state, name) { return (state.transactions || []).filter((t) => t.category === name).length; }
-export function subUsage(state, name, sub) { return (state.transactions || []).filter((t) => t.category === name && t.subCategory === sub).length; }
 export const STATE_VERSION = 2;
 
 export function emptyState() {
@@ -48,22 +47,30 @@ export function emptyState() {
 }
 
 // ---- depolama ----
+// Bozuk/yarım veriye karşı normalleştirme (loadState + import üçün)
+export function normalizeState(s) {
+  const base = emptyState();
+  if (!s || typeof s !== 'object') return base;
+  return {
+    ...base,
+    ...s,
+    categories: (s.categories && typeof s.categories === 'object') ? s.categories : {},
+    transactions: Array.isArray(s.transactions) ? s.transactions : [],
+    incomes: Array.isArray(s.incomes) ? s.incomes : [],
+    debts: Array.isArray(s.debts) ? s.debts : [],
+    futureExpenses: Array.isArray(s.futureExpenses) ? s.futureExpenses : [],
+  };
+}
 export async function loadState() {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const s = JSON.parse(raw);
-      return {
-        ...emptyState(),
-        ...s,
-        categories: s.categories || {},
-      };
-    }
-  } catch (e) {}
+    if (raw) return normalizeState(JSON.parse(raw));
+  } catch (e) { console.warn('XERCLEM loadState:', e && e.message); }
   return emptyState();
 }
 export async function saveState(s) {
-  try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
+  try { await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(s)); }
+  catch (e) { console.warn('XERCLEM saveState:', e && e.message); }
 }
 
 // ---- id / tarih / para ----
@@ -109,13 +116,6 @@ export function shortDate(s) {
   const d = parseYmd(s);
   return `${d.getDate()} ${MONTHS_AZ[d.getMonth()].slice(0, 3)}`;
 }
-// Azerice/Turkce para: 1.234,56
-export function money(n) {
-  const f = Math.abs(Number(n) || 0).toFixed(2);
-  const [i, d] = f.split('.');
-  const sep = i.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-  return `${sep},${d}`;
-}
 export function parseAmount(s) { const n = parseFloat(String(s).replace(',', '.')); return isNaN(n) ? 0 : n; }
 // XERCLEMAPP formatı: maks 1 onluq, minlik ayırıcı; "AZN ..." prefiksi
 export function fmt(n) {
@@ -129,10 +129,10 @@ export function fmt(n) {
 }
 export function azn(n) { return 'AZN ' + fmt(n); }
 // Sistem mesajı (XERCLEMAPP-dakı AI feedback yerine kontekstual mesaj)
-export function systemMessage(ov, stats) {
+export function systemMessage(ov, m) {
   if (ov.cash <= 0) return 'Pulun bitib. Gəlir əlavə et və ya xərcləri dayandır.';
   if (ov.projectedMonthEnd < 0) return 'Bu ayın öhdəliklərindən sonra balansın mənfiyə düşür — ehtiyatlı ol.';
-  if (stats.wastefulTotal > 0 && stats.wastefulTotal >= stats.essentialTotal) return 'İsraf xərclərin vacibdən çoxdur — qənaət şansı var.';
+  if (m.wasteful > 0 && m.wasteful >= m.essential) return 'İsraf xərclərin vacibdən çoxdur — qənaət şansı var.';
   if (ov.cashRunway < 999 && ov.cashRunway <= 7) return `Diqqət: nağdın təxminən ${ov.cashRunway} gün davam edəcək.`;
   return `Gündəlik təhlükəsiz limitin ${azn(ov.dailySafeLimit)}. Yaxşı gedirsən!`;
 }
@@ -151,85 +151,31 @@ export function currentCash(s) {
   return (Number(s.startingBalance) || 0) + inc - exp;
 }
 
-// Donem istatistikleri
-export function calculateStats(s) {
-  const txs = (s.transactions || []).filter((t) => t.category !== DEBT_PAYMENT_CAT);
+// ===== Vahid statistika: seçilmiş dövr üçün HƏR ŞEY (həm dashboard, həm statistika ekranı) =====
+export function statsFor(state, range) {
+  const { start, end, label } = rangeBounds(range);
   const today = todayYmd();
-  const yest = ymd(addDays(new Date(), -1));
-  const now = new Date();
-  const monthPrefix = today.slice(0, 7);
-  const lastMonthPrefix = ymd(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7);
-
-  const onDay = (d) => txs.filter((t) => t.date === d).reduce((a, t) => a + t.amount, 0);
-  const inMonth = (p) => txs.filter((t) => t.date && t.date.startsWith(p));
-  const sum = (arr) => arr.reduce((a, t) => a + t.amount, 0);
-
-  const thisMonthTx = inMonth(monthPrefix);
-  const categoryBreakdown = {};
-  for (const t of thisMonthTx) categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
-
-  return {
-    today: onDay(today),
-    yesterday: onDay(yest),
-    thisMonth: sum(thisMonthTx),
-    lastMonth: sum(inMonth(lastMonthPrefix)),
-    categoryBreakdown,
-    essentialTotal: sum(thisMonthTx.filter((t) => t.isEssential)),
-    wastefulTotal: sum(thisMonthTx.filter((t) => t.isWasteful)),
-    standardTotal: sum(thisMonthTx.filter((t) => !t.isEssential && !t.isWasteful)),
-    topExpenses: thisMonthTx.slice().sort((a, b) => b.amount - a.amount).slice(0, 5),
-    trendDelta: (() => {
-      const lm = sum(inMonth(lastMonthPrefix));
-      const tm = sum(thisMonthTx);
-      return lm > 0 ? ((tm - lm) / lm) * 100 : 0;
-    })(),
-  };
-}
-
-// Dövr üzrə qabaqcıl statistika (gün/həftə/ay/hamısı + alt kateqoriya)
-export function periodRange(period) {
-  const today = todayYmd();
-  const now = new Date();
-  if (period === 'today') return { start: today, end: today };
-  if (period === 'week') return { start: ymd(addDays(now, -6)), end: today };
-  if (period === 'month') return { start: today.slice(0, 7) + '-01', end: today };
-  return { start: '0000-00-00', end: '9999-99-99' };
-}
-export function periodStats(state, period) {
-  const { start, end } = periodRange(period);
-  const txs = (state.transactions || []).filter((t) => t.category !== DEBT_PAYMENT_CAT && t.date >= start && t.date <= end);
-  const total = txs.reduce((a, t) => a + t.amount, 0);
-  const categoryBreakdown = {};
-  const subBreakdown = {};
+  const txs = (state.transactions || []).filter((t) => t.category !== DEBT_PAYMENT_CAT && t.date && t.date >= start && t.date <= end);
+  let total = 0, essential = 0, wasteful = 0;
+  const categoryBreakdown = {}, subBreakdown = {};
   for (const t of txs) {
-    categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
-    const key = t.subCategory || '(altsız)';
+    const amt = Number(t.amount) || 0;
+    total += amt;
+    if (t.isEssential) essential += amt; else if (t.isWasteful) wasteful += amt;
+    categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + amt;
+    const k = t.subCategory || '(altsız)';
     subBreakdown[t.category] = subBreakdown[t.category] || {};
-    subBreakdown[t.category][key] = (subBreakdown[t.category][key] || 0) + t.amount;
+    subBreakdown[t.category][k] = (subBreakdown[t.category][k] || 0) + amt;
   }
-  const essential = txs.filter((t) => t.isEssential).reduce((a, t) => a + t.amount, 0);
-  const wasteful = txs.filter((t) => t.isWasteful).reduce((a, t) => a + t.amount, 0);
   const standard = total - essential - wasteful;
-  const incomeTotal = (state.incomes || []).filter((i) => i.isReceived && i.date >= start && i.date <= end).reduce((a, i) => a + i.amount, 0);
+  // gün sayısı (avgDaily üçün): 'all' yalnız ilk əməliyyatdan BUGÜNƏ qədər sayılır
+  const effEnd = range === 'all' ? today : end;
+  let s = range === 'all' ? today : start;
+  if (range === 'all') for (const t of txs) if (t.date < s) s = t.date;
+  const days = Math.max(1, Math.round((parseYmd(effEnd) - parseYmd(s)) / 86400000) + 1);
+  const incomeTotal = (state.incomes || []).filter((i) => i.isReceived && i.date && i.date >= start && i.date <= end).reduce((a, i) => a + (Number(i.amount) || 0), 0);
   const top = txs.slice().sort((a, b) => b.amount - a.amount).slice(0, 6);
-  return { total, count: txs.length, avg: txs.length ? total / txs.length : 0, categoryBreakdown, subBreakdown, essential, standard, wasteful, incomeTotal, top, txs };
-}
-
-// Ana ekran üçün seçilmiş aralıq statistikası (bütün kartlar buna görə)
-export function statsForRange(state, range) {
-  const { start, end } = rangeBounds(range);
-  const txs = (state.transactions || []).filter((t) => t.category !== DEBT_PAYMENT_CAT && t.date >= start && t.date <= end);
-  const total = txs.reduce((a, t) => a + t.amount, 0);
-  const essential = txs.filter((t) => t.isEssential).reduce((a, t) => a + t.amount, 0);
-  const wasteful = txs.filter((t) => t.isWasteful).reduce((a, t) => a + t.amount, 0);
-  const standard = total - essential - wasteful;
-  let s = start;
-  if (range === 'all') { s = end; for (const t of txs) if (t.date < s) s = t.date; }
-  const days = Math.max(1, Math.round((parseYmd(s) - parseYmd(end)) / -86400000) + 1);
-  const categoryBreakdown = {};
-  for (const t of txs) categoryBreakdown[t.category] = (categoryBreakdown[t.category] || 0) + t.amount;
-  const incomeTotal = (state.incomes || []).filter((i) => i.isReceived && i.date >= start && i.date <= end).reduce((a, i) => a + (Number(i.amount) || 0), 0);
-  return { total, essential, standard, wasteful, count: txs.length, avgDaily: total / days, days, categoryBreakdown, incomeTotal };
+  return { label, total, essential, standard, wasteful, count: txs.length, avg: txs.length ? total / txs.length : 0, avgDaily: total / days, days, categoryBreakdown, subBreakdown, incomeTotal, top, txs };
 }
 
 // Finansal projeksiyon + uyarilar
@@ -270,7 +216,7 @@ export function overview(s) {
   const essentialNeeded =
     debtsDue.filter((d) => d.type === 'Acil').reduce((a, d) => a + (d.amount - (d.paid || 0)), 0) +
     futureDue.filter((f) => f.isEssential).reduce((a, f) => a + f.amount, 0);
-  const essentialCoverage = essentialNeeded > 0 ? Math.min(100, (cash / essentialNeeded) * 100) : 100;
+  const essentialCoverage = essentialNeeded > 0 ? Math.max(0, Math.min(100, (cash / essentialNeeded) * 100)) : 100;
 
   // Nakit omru (gun)
   const cashRunway = cash <= 0 ? 0 : (avgDaily > 0 ? Math.floor(cash / avgDaily) : 999);
