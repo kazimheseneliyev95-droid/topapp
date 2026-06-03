@@ -162,7 +162,8 @@ export function statsFor(state, range) {
   const today = todayYmd();
   const txs = (state.transactions || []).filter((t) => t.category !== DEBT_PAYMENT_CAT && t.date && t.date >= start && t.date <= end);
   let total = 0, essential = 0, wasteful = 0;
-  const categoryBreakdown = {}, subBreakdown = {};
+  const categoryBreakdown = {}, subBreakdown = {}, dailyMap = {};
+  const weekday = [0, 0, 0, 0, 0, 0, 0]; // B.e..Baz (Bazar ertəsi = 0)
   for (const t of txs) {
     const amt = Number(t.amount) || 0;
     total += amt;
@@ -171,6 +172,8 @@ export function statsFor(state, range) {
     const k = t.subCategory || '(altsız)';
     subBreakdown[t.category] = subBreakdown[t.category] || {};
     subBreakdown[t.category][k] = (subBreakdown[t.category][k] || 0) + amt;
+    weekday[(parseYmd(t.date).getDay() + 6) % 7] += amt;
+    dailyMap[t.date] = (dailyMap[t.date] || 0) + amt;
   }
   const standard = total - essential - wasteful;
   // gün sayısı (avgDaily üçün): 'all' yalnız ilk əməliyyatdan BUGÜNƏ qədər sayılır
@@ -180,7 +183,7 @@ export function statsFor(state, range) {
   const days = Math.max(1, Math.round((parseYmd(effEnd) - parseYmd(s)) / 86400000) + 1);
   const incomeTotal = (state.incomes || []).filter((i) => i.isReceived && i.date && i.date >= start && i.date <= end).reduce((a, i) => a + (Number(i.amount) || 0), 0);
   const top = txs.slice().sort((a, b) => b.amount - a.amount).slice(0, 6);
-  return { label, total, essential, standard, wasteful, count: txs.length, avg: txs.length ? total / txs.length : 0, avgDaily: total / days, days, categoryBreakdown, subBreakdown, incomeTotal, top, txs };
+  return { label, start, end, total, essential, standard, wasteful, count: txs.length, avg: txs.length ? total / txs.length : 0, avgDaily: total / days, days, categoryBreakdown, subBreakdown, weekday, dailyMap, incomeTotal, top, txs };
 }
 
 // Finansal projeksiyon + uyarilar

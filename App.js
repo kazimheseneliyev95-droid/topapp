@@ -1,9 +1,10 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator, Alert, AppState, KeyboardAvoidingView, LayoutAnimation, Modal, Platform,
+  ActivityIndicator, Alert, AppState, Dimensions, KeyboardAvoidingView, LayoutAnimation, Modal, Platform,
   Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, UIManager, View,
 } from 'react-native';
+import Svg, { Circle, G, Path } from 'react-native-svg';
 import {
   DEBT_PAYMENT_CAT, KINDS, EMOJI_SET, COLOR_SET, STATE_VERSION,
   emptyState, loadState, saveState, uid, ymd, todayYmd, parseYmd, addDays,
@@ -492,6 +493,50 @@ function Bar({ label, value, max, color, onPress, right }) {
     </Comp>
   );
 }
+const CHART_W = Dimensions.get('window').width - 64;
+function Donut({ data, size = 150, stroke = 24 }) {
+  const total = data.reduce((a, d) => a + d.value, 0);
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r; let offset = 0;
+  return (
+    <Svg width={size} height={size}>
+      <G rotation="-90" originX={size / 2} originY={size / 2}>
+        <Circle cx={size / 2} cy={size / 2} r={r} stroke="#eef2f7" strokeWidth={stroke} fill="none" />
+        {total > 0 ? data.map((d, i) => {
+          const dash = (d.value / total) * c;
+          const el = <Circle key={i} cx={size / 2} cy={size / 2} r={r} stroke={d.color} strokeWidth={stroke} fill="none" strokeDasharray={`${dash} ${c - dash}`} strokeDashoffset={-offset} />;
+          offset += dash; return el;
+        }) : null}
+      </G>
+    </Svg>
+  );
+}
+function LineChart({ values, width, height, color }) {
+  const n = values.length; if (!n) return <View style={{ height }} />;
+  const max = Math.max(1, ...values);
+  const stepX = n > 1 ? width / (n - 1) : 0;
+  const pts = values.map((v, i) => [n > 1 ? i * stepX : width / 2, height - 4 - (v / max) * (height - 10)]);
+  const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+  const area = n > 1 ? `${line} L ${pts[n - 1][0].toFixed(1)} ${height} L ${pts[0][0].toFixed(1)} ${height} Z` : '';
+  return (
+    <Svg width={width} height={height}>
+      {area ? <Path d={area} fill={color + '22'} /> : null}
+      <Path d={line} stroke={color} strokeWidth={2.5} fill="none" />
+    </Svg>
+  );
+}
+function WeekdayBars({ data }) {
+  const max = Math.max(1, ...data), maxV = Math.max(...data);
+  return (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+      {data.map((v, i) => (
+        <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+          <View style={{ width: 16, height: Math.max(3, (v / max) * 64), borderRadius: 4, backgroundColor: v === maxV && v > 0 ? '#f43f5e' : '#0EA5E9' }} />
+          <Text style={{ fontSize: 9, color: '#64748b', marginTop: 5 }}>{WEEKDAYS_AZ[i]}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
 
 function IncomeSheet({ visible, state, onClose, onAdd, onDelete, onToggle }) {
   const [title, setTitle] = useState(''); const [amount, setAmount] = useState(''); const [date, setDate] = useState(new Date()); const [received, setReceived] = useState(true);
@@ -562,6 +607,15 @@ function StatsSheet({ visible, state, onClose }) {
   const pc = (v) => ps.total ? Math.round((v / ps.total) * 100) : 0;
   const catE = Object.entries(ps.categoryBreakdown).sort((a, b) => b[1] - a[1]);
   const maxC = Math.max(1, ...catE.map((e) => e[1]));
+  const donutData = catE.map(([n, v]) => ({ value: v, color: catMeta(state, n).color }));
+  const lineVals = useMemo(() => {
+    const realEnd = period === 'all' ? todayYmd() : ps.end;
+    const cap = ymd(addDays(parseYmd(realEnd), -30));
+    const from = (ps.start < cap) ? cap : ps.start;
+    const arr = []; let cur = parseYmd(from); let guard = 0;
+    while (ymd(cur) <= realEnd && guard < 95) { arr.push(ps.dailyMap[ymd(cur)] || 0); cur = addDays(cur, 1); guard++; }
+    return arr;
+  }, [ps, period]);
   const kinds = [{ l: '🛡️ Vacib', v: ps.essential, c: '#16a34a' }, { l: '🛒 Standart', v: ps.standard, c: '#ca8a04' }, { l: '🔥 İsraf', v: ps.wasteful, c: '#ea580c' }];
   const maxK = Math.max(1, ...kinds.map((k) => k.v));
   function reset() { setDrillCat(null); setDrillSub(null); }
@@ -577,6 +631,34 @@ function StatsSheet({ visible, state, onClose }) {
 
       {!drillCat ? (
         <>
+          {ps.total > 0 ? (
+            <>
+              <Text style={styles.statH}>Kateqoriya payları</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 4 }}>
+                <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  <Donut data={donutData} />
+                  <View style={{ position: 'absolute', alignItems: 'center' }}><Text style={{ fontSize: 10, color: '#94a3b8' }}>Cəmi</Text><Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a' }}>{azn(ps.total)}</Text></View>
+                </View>
+                <View style={{ flex: 1, gap: 6 }}>
+                  {catE.slice(0, 6).map(([n, v]) => (
+                    <View key={n} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: catMeta(state, n).color }} />
+                      <Text style={{ flex: 1, color: '#334155', fontSize: 12 }} numberOfLines={1}>{n}</Text>
+                      <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '700' }}>{pc(v)}%</Text>
+                    </View>
+                  ))}
+                  {catE.length > 6 ? <Text style={{ color: '#94a3b8', fontSize: 11 }}>+{catE.length - 6} daha…</Text> : null}
+                </View>
+              </View>
+
+              <Text style={styles.statH}>Günlük trend</Text>
+              <View style={styles.chartCard}><LineChart values={lineVals} width={CHART_W} height={70} color="#0EA5E9" /></View>
+
+              <Text style={styles.statH}>Həftə günü üzrə  <Text style={styles.tapHint}>(ən çox xərc qırmızı)</Text></Text>
+              <View style={styles.chartCard}><WeekdayBars data={ps.weekday} /></View>
+            </>
+          ) : null}
+
           <Text style={styles.statH}>Növə görə</Text>
           {kinds.map((k) => <Bar key={k.l} label={k.l} value={k.v} max={maxK} color={k.c} right={`${pc(k.v)}%  ·  ${azn(k.v)}`} />)}
           <Text style={styles.statH}>Kateqoriya üzrə  <Text style={styles.tapHint}>(detay üçün toxun)</Text></Text>
@@ -860,6 +942,7 @@ const styles = StyleSheet.create({
   barVal: { color: '#64748b', fontSize: 12, fontWeight: '700' },
   barTrack: { height: 9, borderRadius: 5, backgroundColor: '#e2e8f0', overflow: 'hidden' },
   barFill: { height: 9, borderRadius: 5 },
+  chartCard: { backgroundColor: '#fff', borderRadius: 14, padding: 12, borderWidth: 1, borderColor: '#e2e8f0' },
   topRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
   catCard: { backgroundColor: '#fff', borderRadius: 13, padding: 11, marginBottom: 8, borderWidth: 1, borderColor: '#e2e8f0' },
   subManageRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, paddingLeft: 42, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
