@@ -6,6 +6,7 @@ import { normalizeState } from './finance';
 
 export const API_BASE = 'https://xerclem.80-240-17-26.sslip.io';
 const TOKEN_KEY = 'xerclem_token';
+const CREDS_KEY = 'xerclem_creds'; // ilk daxil olunan user/parol — auto-fill üçün
 
 let _token = null;
 let _prev = null; // serverlə son sinxron state (silinənləri tapmaq üçün)
@@ -21,6 +22,14 @@ export async function setToken(t) {
     if (t) await AsyncStorage.setItem(TOKEN_KEY, t);
     else await AsyncStorage.removeItem(TOKEN_KEY);
   } catch (e) {}
+}
+
+// İlk daxil olunan user/parolu yadda saxla → növbəti dəfə login avtomatik dolsun.
+export async function loadCreds() {
+  try { const raw = await AsyncStorage.getItem(CREDS_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+}
+async function saveCreds(email, password) {
+  try { await AsyncStorage.setItem(CREDS_KEY, JSON.stringify({ email, password })); } catch (e) {}
 }
 
 async function apiFetch(path, opts = {}) {
@@ -59,11 +68,13 @@ async function apiFetch(path, opts = {}) {
 export async function signin(email, password) {
   const d = await apiFetch('/api/auth/signin', { method: 'POST', body: { email, password } });
   await setToken(d.token);
+  await saveCreds(email, password);
   return d.user;
 }
 export async function signup(email, password) {
   const d = await apiFetch('/api/auth/signup', { method: 'POST', body: { email, password } });
   await setToken(d.token);
+  await saveCreds(email, password);
   return d.user;
 }
 
