@@ -15,6 +15,7 @@ import {
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as DocumentPicker from 'expo-document-picker';
+import * as api from './src/api';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) UIManager.setLayoutAnimationEnabledExperimental(true);
 const animate = () => { try { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); } catch (e) {} };
@@ -67,28 +68,98 @@ const TINT = {
 const RANGES = [{ k: '7', l: 'Son 7 gün' }, { k: '15', l: 'Son 15 gün' }, { k: 'month', l: 'Bu ay' }, { k: 'lastmonth', l: 'Keçən ay' }, { k: 'all', l: 'Hamısı' }];
 
 export default function App() {
-  const [loading, setLoading] = useState(true);
+  const [booting, setBooting] = useState(true);   // token yoxlanır
+  const [authed, setAuthed] = useState(false);
+  const [loading, setLoading] = useState(false);  // serverdən state yüklənir
   const [state, setState] = useState(emptyState());
   const stateRef = useRef(state);
   stateRef.current = state;
-  useEffect(() => { (async () => { setState(await loadState()); setLoading(false); })(); }, []);
-  // Debounce'lu kalıcılık (sıx yazımı birləşdirir, AsyncStorage-i yormur)
+
+  // Serverdən tam state-i çək
+  async function pullFromServer() {
+    setLoading(true);
+    try { setState(await api.loadOnline()); setAuthed(true); }
+    catch (e) {
+      if (e && e.code === 401) setAuthed(false);
+      else Alert.alert('Bağlantı xətası', (e && e.message) || 'Serverə qoşulmaq olmadı');
+      throw e;
+    } finally { setLoading(false); }
+  }
+
+  // İlk açılış: saxlanmış token varsa avtomatik yüklə
+  useEffect(() => { (async () => {
+    const t = await api.getToken();
+    if (t) { try { await pullFromServer(); } catch (e) {} }
+    setBooting(false);
+  })(); }, []);
+
+  // Online saxlama (debounce) — yalnız daxil olduqdan və yükləndikdən sonra
   useEffect(() => {
-    if (loading) return;
-    const t = setTimeout(() => saveState(state), 350);
+    if (!authed || loading) return;
+    const t = setTimeout(() => { api.saveOnline(state).catch((e) => { if (e && e.code === 401) setAuthed(false); }); }, 600);
     return () => clearTimeout(t);
-  }, [state, loading]);
-  // Tətbiq arxa plana keçəndə dərhal yadda saxla (debounce pəncərəsində itki olmasın)
+  }, [state, authed, loading]);
+
+  // Arxa plana keçəndə dərhal saxla
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (st) => { if (st !== 'active') saveState(stateRef.current); });
+    const sub = AppState.addEventListener('change', (st) => { if (st !== 'active' && authed) api.saveOnline(stateRef.current).catch(() => {}); });
     return () => sub.remove();
-  }, []);
+  }, [authed]);
+
   const mutate = (fn) => setState((prev) => fn(prev));
+  async function handleLogout() { await api.setToken(null); setState(emptyState()); setAuthed(false); }
+
+  if (booting) return <View style={[styles.root, styles.center]}><StatusBar style="dark" /><ActivityIndicator color="#0EA5E9" size="large" /></View>;
+  if (!authed) return <LoginScreen onDone={pullFromServer} />;
   if (loading) return <View style={[styles.root, styles.center]}><StatusBar style="dark" /><ActivityIndicator color="#0EA5E9" size="large" /></View>;
-  return <Dashboard state={state} mutate={mutate} />;
+  return <Dashboard state={state} mutate={mutate} onLogout={handleLogout} />;
 }
 
-function Dashboard({ state, mutate }) {
+function LoginScreen({ onDone }) {
+  const [mode, setMode] = useState('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const submit = async () => {
+    if (busy) return;
+    const e1 = (email || '').trim();
+    if (!e1 || !password) { setErr('Mail və parol lazımdır'); return; }
+    setErr(''); setBusy(true);
+    try {
+      if (mode === 'signin') await api.signin(e1, password);
+      else await api.signup(e1, password);
+      await onDone();
+    } catch (e) { setErr((e && e.message) || 'Xəta baş verdi'); setBusy(false); }
+  };
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: '#f1f5f9' }}>
+      <StatusBar style="dark" />
+      <ScrollView contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: 24 }} keyboardShouldPersistTaps="handled">
+        <Text style={{ fontSize: 36, fontWeight: '800', color: '#0f172a', textAlign: 'center' }}>Xerclem</Text>
+        <Text style={{ fontSize: 15, color: '#64748b', textAlign: 'center', marginTop: 6, marginBottom: 28 }}>
+          {mode === 'signin' ? 'Hesabına daxil ol' : 'Yeni hesab yarat'}
+        </Text>
+        <TextInput value={email} onChangeText={setEmail} placeholder="E-poçt" placeholderTextColor="#94a3b8"
+          autoCapitalize="none" autoCorrect={false} keyboardType="email-address"
+          style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 15, fontSize: 16, marginBottom: 12, color: '#0f172a' }} />
+        <TextInput value={password} onChangeText={setPassword} placeholder="Parol" placeholderTextColor="#94a3b8"
+          secureTextEntry autoCapitalize="none"
+          style={{ backgroundColor: '#fff', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 15, fontSize: 16, color: '#0f172a' }} />
+        {err ? <Text style={{ color: '#dc2626', marginTop: 14, textAlign: 'center', fontSize: 14 }}>{err}</Text> : null}
+        <TouchableOpacity onPress={submit} disabled={busy}
+          style={{ backgroundColor: '#0EA5E9', borderRadius: 14, paddingVertical: 17, marginTop: 20, alignItems: 'center', opacity: busy ? 0.6 : 1 }}>
+          {busy ? <ActivityIndicator color="#fff" /> : <Text style={{ color: '#fff', fontSize: 17, fontWeight: '700' }}>{mode === 'signin' ? 'Daxil ol' : 'Qeydiyyatdan keç'}</Text>}
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => { setErr(''); setMode(mode === 'signin' ? 'signup' : 'signin'); }} style={{ marginTop: 20, alignItems: 'center' }}>
+          <Text style={{ color: '#0EA5E9', fontSize: 14 }}>{mode === 'signin' ? 'Hesabın yoxdur? Qeydiyyat' : 'Hesabın var? Daxil ol'}</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+function Dashboard({ state, mutate, onLogout }) {
   const [sheet, setSheet] = useState(null);
   const [formTx, setFormTx] = useState(null);
 
@@ -217,7 +288,7 @@ function Dashboard({ state, mutate }) {
       <FutureSheet visible={sheet === 'future'} state={state} onClose={() => setSheet(null)} onAdd={addFuture} onDelete={delFuture} />
       <IncomeSheet visible={sheet === 'income'} state={state} onClose={() => setSheet(null)} onAdd={addIncome} onDelete={delIncome} onToggle={toggleIncome} />
       <StatsSheet visible={sheet === 'stats'} state={state} onClose={() => setSheet(null)} />
-      <SettingsSheet visible={sheet === 'settings'} state={state} range={range} onSetRange={setRange} onClose={() => setSheet(null)} onSetCash={setCash} onReset={resetAll} onOpenCats={() => setSheet('cats')} onRestore={restore} />
+      <SettingsSheet visible={sheet === 'settings'} state={state} range={range} onSetRange={setRange} onClose={() => setSheet(null)} onSetCash={setCash} onReset={resetAll} onOpenCats={() => setSheet('cats')} onRestore={restore} onLogout={onLogout} />
       <CategorySheet visible={sheet === 'cats'} state={state} onClose={() => setSheet('settings')} catApi={catApi} onDelCat={delCategory} onDelSub={delSub} onClearAll={clearCats} />
     </View>
   );
@@ -746,7 +817,7 @@ function CategorySheet({ visible, state, onClose, catApi, onDelCat, onDelSub, on
   );
 }
 
-function SettingsSheet({ visible, state, range, onSetRange, onClose, onSetCash, onReset, onOpenCats, onRestore }) {
+function SettingsSheet({ visible, state, range, onSetRange, onClose, onSetCash, onReset, onOpenCats, onRestore, onLogout }) {
   const [cash, setCash] = useState('');
   function apply() { const amt = parseAmount(cash); onSetCash(amt); setCash(''); Alert.alert('Tamam', `İndiki pul ${azn(amt)} olaraq təyin edildi.`); }
   return (
@@ -772,6 +843,11 @@ function SettingsSheet({ visible, state, range, onSetRange, onClose, onSetCash, 
         <Text style={styles.hintTxt}>Hazırkı: {azn(currentCash(state))}. Real nağdını yaz, sistem başlanğıcı buna uyğunlaşdıracaq.</Text>
         <TextInput style={styles.input2} placeholder="məs. 500" placeholderTextColor="#94a3b8" keyboardType="decimal-pad" value={cash} onChangeText={setCash} />
         <TouchableOpacity style={styles.confirmBtn} onPress={apply}><Text style={styles.confirmText}>Təyin et</Text></TouchableOpacity>
+      </View>
+      <View style={styles.formCard}>
+        <Text style={styles.fLabel}>HESAB</Text>
+        <Text style={styles.hintTxt}>Məlumatların online serverdə saxlanılır. Çıxış etsən başqa hesabla daxil ola bilərsən (məlumatlar serverdə qalır).</Text>
+        <TouchableOpacity style={[styles.confirmBtn, { backgroundColor: '#475569' }]} onPress={() => Alert.alert('Çıxış?', 'Hesabdan çıxmaq istəyirsən?', [{ text: 'İmtina', style: 'cancel' }, { text: 'Çıxış', style: 'destructive', onPress: onLogout }])}><Text style={styles.confirmText}>🚪 Çıxış</Text></TouchableOpacity>
       </View>
       <View style={[styles.formCard, { borderColor: '#fecaca' }]}>
         <Text style={styles.fLabel}>TƏHLÜKƏLİ</Text>
