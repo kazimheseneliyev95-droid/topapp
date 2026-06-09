@@ -826,9 +826,16 @@ function CategorySheet({ visible, state, onClose, catApi, onDelCat, onDelSub, on
 
 function SettingsSheet({ visible, state, range, onSetRange, onClose, onSetCash, onReset, onOpenCats, onRestore, onLogout }) {
   const [cash, setCash] = useState('');
+  const [acc, setAcc] = useState('');
+  useEffect(() => { (async () => { const c = await api.loadCreds(); if (c && c.email) setAcc(c.email); })(); }, [visible]);
   function apply() { const amt = parseAmount(cash); onSetCash(amt); setCash(''); Alert.alert('Tamam', `İndiki pul ${azn(amt)} olaraq təyin edildi.`); }
   return (
     <Sheet visible={visible} onClose={onClose} title="⚙️ Tənzimləmələr">
+      <View style={[styles.formCard, { borderColor: '#bfdbfe', backgroundColor: '#eff6ff' }]}>
+        <Text style={styles.fLabel}>HESAB</Text>
+        <Text style={styles.hintTxt}>{acc ? `Daxil olmusan: ${acc}` : 'Daxil olmusan.'}  Məlumatlar online serverdə qalır.</Text>
+        <TouchableOpacity style={[styles.confirmBtn, { backgroundColor: '#ef4444' }]} onPress={() => Alert.alert('Çıxış?', 'Hesabdan çıxmaq istəyirsən? (Məlumatlar serverdə qalır, yenidən girə bilərsən)', [{ text: 'İmtina', style: 'cancel' }, { text: 'Çıxış et', style: 'destructive', onPress: onLogout }])}><Text style={styles.confirmText}>🚪 Çıxış (Logout)</Text></TouchableOpacity>
+      </View>
       <View style={styles.formCard}>
         <Text style={styles.fLabel}>ƏSAS EKRAN DÖVRÜ</Text>
         <Text style={styles.hintTxt}>Ana ekran seçilmiş dövrə görə göstərilir (yadda saxlanılır).</Text>
@@ -850,11 +857,6 @@ function SettingsSheet({ visible, state, range, onSetRange, onClose, onSetCash, 
         <Text style={styles.hintTxt}>Hazırkı: {azn(currentCash(state))}. Real nağdını yaz, sistem başlanğıcı buna uyğunlaşdıracaq.</Text>
         <TextInput style={styles.input2} placeholder="məs. 500" placeholderTextColor="#94a3b8" keyboardType="decimal-pad" value={cash} onChangeText={setCash} />
         <TouchableOpacity style={styles.confirmBtn} onPress={apply}><Text style={styles.confirmText}>Təyin et</Text></TouchableOpacity>
-      </View>
-      <View style={styles.formCard}>
-        <Text style={styles.fLabel}>HESAB</Text>
-        <Text style={styles.hintTxt}>Məlumatların online serverdə saxlanılır. Çıxış etsən başqa hesabla daxil ola bilərsən (məlumatlar serverdə qalır).</Text>
-        <TouchableOpacity style={[styles.confirmBtn, { backgroundColor: '#475569' }]} onPress={() => Alert.alert('Çıxış?', 'Hesabdan çıxmaq istəyirsən?', [{ text: 'İmtina', style: 'cancel' }, { text: 'Çıxış', style: 'destructive', onPress: onLogout }])}><Text style={styles.confirmText}>🚪 Çıxış</Text></TouchableOpacity>
       </View>
       <View style={[styles.formCard, { borderColor: '#fecaca' }]}>
         <Text style={styles.fLabel}>TƏHLÜKƏLİ</Text>
