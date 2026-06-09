@@ -135,7 +135,7 @@ export function fmt(n) {
 export function azn(n) { return 'AZN ' + fmt(n); }
 // Sistem mesajı (XERCLEMAPP-dakı AI feedback yerine kontekstual mesaj)
 export function systemMessage(ov, m) {
-  if (ov.cash <= 0) return 'Pulun bitib. Gəlir əlavə et və ya xərcləri dayandır.';
+  if (ov.cash <= 0) return 'Pulun bitib — xərcləri azalt və ya başlanğıc balansı ⚙️-dən yenilə.';
   if (ov.projectedMonthEnd < 0) return 'Bu ayın öhdəliklərindən sonra balansın mənfiyə düşür — ehtiyatlı ol.';
   if (m.wasteful > 0 && m.wasteful >= m.essential) return 'İsraf xərclərin vacibdən çoxdur — qənaət şansı var.';
   if (ov.cashRunway < 999 && ov.cashRunway <= 7) return `Diqqət: nağdın təxminən ${ov.cashRunway} gün davam edəcək.`;
@@ -151,9 +151,9 @@ export function kindOf(t) { if (t.isEssential) return 'essential'; if (t.isWaste
 
 // Nakit (tek dogruluk kaynagi): baslangic + alinan gelirler - tum harcamalar
 export function currentCash(s) {
-  const inc = (s.incomes || []).filter((i) => i && i.isReceived).reduce((a, i) => a + (Number(i.amount) || 0), 0);
+  // Gəlir sistemdən çıxarıldı — nağd = başlanğıc balans − bütün xərclər.
   const exp = (s.transactions || []).reduce((a, t) => a + (Number(t && t.amount) || 0), 0);
-  return (Number(s.startingBalance) || 0) + inc - exp;
+  return (Number(s.startingBalance) || 0) - exp;
 }
 
 // ===== Vahid statistika: seçilmiş dövr üçün HƏR ŞEY (həm dashboard, həm statistika ekranı) =====
@@ -237,11 +237,8 @@ export function overview(s) {
 
 // Uyarilar: gecikmis bekleyen gelir + yaklasan borc (-5..+1 gun)
 export function buildAlerts(s) {
-  const today = todayYmd();
+  // Gəlir xəbərdarlıqları çıxarıldı — yalnız yaxınlaşan borclar.
   const out = [];
-  for (const i of (s.incomes || [])) {
-    if (!i.isReceived && i.date && i.date <= today) out.push({ kind: 'income', title: i.title, amount: i.amount, date: i.date });
-  }
   const lo = ymd(addDays(new Date(), -5)), hi = ymd(addDays(new Date(), 1));
   for (const d of (s.debts || [])) {
     if ((d.paid || 0) < d.amount && d.dueDate && d.dueDate >= lo && d.dueDate <= hi) {

@@ -190,7 +190,7 @@ function Dashboard({ state, mutate, onLogout }) {
   });
   const addFuture = (f) => mutate((s) => ({ ...s, futureExpenses: [f, ...s.futureExpenses] }));
   const delFuture = (id) => mutate((s) => ({ ...s, futureExpenses: s.futureExpenses.filter((x) => x.id !== id) }));
-  const setCash = (target) => mutate((s) => { const inc = s.incomes.filter((i) => i.isReceived).reduce((a, i) => a + (Number(i.amount) || 0), 0); const exp = s.transactions.reduce((a, t) => a + (Number(t.amount) || 0), 0); return { ...s, startingBalance: target - inc + exp }; });
+  const setCash = (target) => mutate((s) => { const exp = (s.transactions || []).reduce((a, t) => a + (Number(t.amount) || 0), 0); return { ...s, startingBalance: target + exp }; });
   const resetAll = () => mutate(() => emptyState());
   const restore = (data) => mutate(() => normalizeState(data));
   const clearCats = () => { animate(); mutate((s) => ({ ...s, categories: {} })); };
@@ -223,6 +223,10 @@ function Dashboard({ state, mutate, onLogout }) {
 
   const heroColor = ov.cash > 0 ? '#16a34a' : '#dc2626';
   const catApi = { addCategory, addSub, editCategory };
+  const today = todayYmd();
+  const todayTx = (state.transactions || []).filter((t) => t.date === today && t.category !== DEBT_PAYMENT_CAT);
+  const todayTotal = todayTx.reduce((a, t) => a + (Number(t.amount) || 0), 0);
+  const todayCount = todayTx.length;
 
   return (
     <View style={styles.root}>
@@ -234,7 +238,6 @@ function Dashboard({ state, mutate, onLogout }) {
             <HIcon icon="💳" tint="red" onPress={() => setSheet('debt')} />
             <HIcon icon="📊" tint="orange" onPress={() => setSheet('stats')} />
             <HIcon icon="📅" tint="blue" onPress={() => setSheet('future')} />
-            <HIcon icon="📈" tint="green" onPress={() => setSheet('income')} />
             <HIcon icon="⚙️" tint="slate" onPress={() => setSheet('settings')} />
           </View>
         </View>
@@ -263,7 +266,7 @@ function Dashboard({ state, mutate, onLogout }) {
         <View style={styles.gridPad}>
           <View style={styles.row2}>
             <StatCard icon="📅" label="GÜNDƏLİK ORTA" value={azn(rs.avgDaily)} sub={`${rs.count} əməliyyat`} tint="blue" flex />
-            <StatCard icon="💰" label="GƏLİR (dövr)" value={azn(rs.incomeTotal || 0)} sub={`net ${azn((rs.incomeTotal || 0) - rs.total)}`} tint="green" flex />
+            <StatCard icon="📆" label="BUGÜN" value={azn(todayTotal)} sub={`${todayCount} əməliyyat`} tint="red" flex />
           </View>
           <View style={styles.row3}>
             <StatCard icon="🛡️" label="VACIB" value={azn(rs.essential)} sub={`${rs.total ? Math.round(rs.essential / rs.total * 100) : 0}%`} tint="red" flex small />
@@ -293,7 +296,6 @@ function Dashboard({ state, mutate, onLogout }) {
       <ExpenseSheet visible={!!formTx} state={state} initial={formTx && formTx.id ? formTx : null} catApi={catApi} onClose={() => setFormTx(null)} onSave={saveTx} onDelete={delTx} />
       <DebtSheet visible={sheet === 'debt'} state={state} onClose={() => setSheet(null)} onAdd={addDebt} onDelete={delDebt} onPay={payDebt} />
       <FutureSheet visible={sheet === 'future'} state={state} onClose={() => setSheet(null)} onAdd={addFuture} onDelete={delFuture} />
-      <IncomeSheet visible={sheet === 'income'} state={state} onClose={() => setSheet(null)} onAdd={addIncome} onDelete={delIncome} onToggle={toggleIncome} />
       <StatsSheet visible={sheet === 'stats'} state={state} onClose={() => setSheet(null)} />
       <SettingsSheet visible={sheet === 'settings'} state={state} range={range} onSetRange={setRange} onClose={() => setSheet(null)} onSetCash={setCash} onReset={resetAll} onOpenCats={() => setSheet('cats')} onRestore={restore} onLogout={onLogout} />
       <CategorySheet visible={sheet === 'cats'} state={state} onClose={() => setSheet('settings')} catApi={catApi} onDelCat={delCategory} onDelSub={delSub} onClearAll={clearCats} />
@@ -686,6 +688,10 @@ function StatsSheet({ visible, state, onClose }) {
   const catE = Object.entries(ps.categoryBreakdown).sort((a, b) => b[1] - a[1]);
   const maxC = Math.max(1, ...catE.map((e) => e[1]));
   const donutData = catE.map(([n, v]) => ({ value: v, color: catMeta(state, n).color }));
+  const dayMap = {};
+  for (const t of ps.txs) { if (!dayMap[t.date]) dayMap[t.date] = { sum: 0, count: 0 }; dayMap[t.date].sum += t.amount; dayMap[t.date].count++; }
+  const dayE = Object.entries(dayMap).sort((a, b) => (a[0] < b[0] ? 1 : -1));
+  const maxD = Math.max(1, ...dayE.map((e) => e[1].sum));
   const lineVals = useMemo(() => {
     const realEnd = period === 'all' ? todayYmd() : ps.end;
     const cap = ymd(addDays(parseYmd(realEnd), -30));
@@ -702,8 +708,8 @@ function StatsSheet({ visible, state, onClose }) {
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 12 }}>{RANGES.map((p) => <TouchableOpacity key={p.k} onPress={() => { setPeriod(p.k); reset(); }} style={[styles.rangeChip, period === p.k && styles.rangeChipA]}><Text style={[styles.rangeChipT, period === p.k && styles.rangeChipTA]}>{p.l}</Text></TouchableOpacity>)}</ScrollView>
       <View style={styles.sumRow}>
         <View style={styles.sumCard}><Text style={styles.sumLabel}>Xərc</Text><Text style={[styles.sumVal, { color: '#dc2626' }]}>{azn(ps.total)}</Text></View>
-        <View style={styles.sumCard}><Text style={styles.sumLabel}>Gəlir</Text><Text style={[styles.sumVal, { color: '#16a34a' }]}>{azn(ps.incomeTotal)}</Text></View>
-        <View style={styles.sumCard}><Text style={styles.sumLabel}>Net</Text><Text style={[styles.sumVal, { color: ps.incomeTotal - ps.total >= 0 ? '#16a34a' : '#dc2626' }]}>{azn(ps.incomeTotal - ps.total)}</Text></View>
+        <View style={styles.sumCard}><Text style={styles.sumLabel}>Əməliyyat</Text><Text style={[styles.sumVal, { color: '#0f172a' }]}>{ps.count}</Text></View>
+        <View style={styles.sumCard}><Text style={styles.sumLabel}>Orta/gün</Text><Text style={[styles.sumVal, { color: '#0f172a' }]}>{azn(ps.avgDaily)}</Text></View>
       </View>
       <Text style={styles.miniNote}>{ps.count} əməliyyat · orta {azn(ps.avg)}</Text>
 
@@ -722,15 +728,29 @@ function StatsSheet({ visible, state, onClose }) {
                     <View key={n} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                       <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: catMeta(state, n).color }} />
                       <Text style={{ flex: 1, color: '#334155', fontSize: 12 }} numberOfLines={1}>{n}</Text>
-                      <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '700' }}>{pc(v)}%</Text>
+                      <Text style={{ color: '#0f172a', fontSize: 12, fontWeight: '700' }}>{azn(v)}</Text>
+                      <Text style={{ color: '#94a3b8', fontSize: 11, width: 36, textAlign: 'right' }}>{pc(v)}%</Text>
                     </View>
                   ))}
-                  {catE.length > 6 ? <Text style={{ color: '#94a3b8', fontSize: 11 }}>+{catE.length - 6} daha…</Text> : null}
+                  {catE.length > 6 ? <Text style={{ color: '#94a3b8', fontSize: 11 }}>+{catE.length - 6} aşağıda (tam siyahı)…</Text> : null}
                 </View>
               </View>
 
               <Text style={styles.statH}>Günlük trend</Text>
               <View style={styles.chartCard}><LineChart values={lineVals} width={CHART_W} height={70} color="#0EA5E9" /></View>
+
+              <Text style={styles.statH}>Gün-gün xərc</Text>
+              {dayE.map(([d, o]) => (
+                <View key={d} style={{ marginBottom: 9 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
+                    <Text style={{ color: '#334155', fontSize: 13, fontWeight: '600' }}>{dateLabel(d)}  <Text style={{ color: '#94a3b8', fontWeight: '400', fontSize: 12 }}>· {o.count} əm.</Text></Text>
+                    <Text style={{ color: '#dc2626', fontSize: 13, fontWeight: '800' }}>{azn(o.sum)}</Text>
+                  </View>
+                  <View style={{ height: 7, borderRadius: 4, backgroundColor: '#f1f5f9', overflow: 'hidden' }}>
+                    <View style={{ height: 7, borderRadius: 4, width: `${Math.max(4, (o.sum / maxD) * 100)}%`, backgroundColor: '#0EA5E9' }} />
+                  </View>
+                </View>
+              ))}
 
               <Text style={styles.statH}>Həftə günü üzrə  <Text style={styles.tapHint}>(ən çox xərc qırmızı)</Text></Text>
               <View style={styles.chartCard}><WeekdayBars data={ps.weekday} /></View>
