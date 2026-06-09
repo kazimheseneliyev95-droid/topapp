@@ -237,6 +237,7 @@ function Dashboard({ state, mutate, onLogout }) {
           <View style={styles.iconRow}>
             <HIcon icon="💳" tint="red" onPress={() => setSheet('debt')} />
             <HIcon icon="📊" tint="orange" onPress={() => setSheet('stats')} />
+            <HIcon icon="📈" tint="purple" onPress={() => setSheet('analytics')} />
             <HIcon icon="📅" tint="blue" onPress={() => setSheet('future')} />
             <HIcon icon="⚙️" tint="slate" onPress={() => setSheet('settings')} />
           </View>
@@ -297,6 +298,7 @@ function Dashboard({ state, mutate, onLogout }) {
       <DebtSheet visible={sheet === 'debt'} state={state} onClose={() => setSheet(null)} onAdd={addDebt} onDelete={delDebt} onPay={payDebt} />
       <FutureSheet visible={sheet === 'future'} state={state} onClose={() => setSheet(null)} onAdd={addFuture} onDelete={delFuture} />
       <StatsSheet visible={sheet === 'stats'} state={state} onClose={() => setSheet(null)} />
+      <AnalyticsSheet visible={sheet === 'analytics'} state={state} onClose={() => setSheet(null)} />
       <SettingsSheet visible={sheet === 'settings'} state={state} range={range} onSetRange={setRange} onClose={() => setSheet(null)} onSetCash={setCash} onReset={resetAll} onOpenCats={() => setSheet('cats')} onRestore={restore} onLogout={onLogout} />
       <CategorySheet visible={sheet === 'cats'} state={state} onClose={() => setSheet('settings')} catApi={catApi} onDelCat={delCategory} onDelSub={delSub} onClearAll={clearCats} />
     </View>
@@ -575,6 +577,7 @@ function Bar({ label, value, max, color, onPress, right }) {
 }
 const CHART_W = Dimensions.get('window').width - 64;
 const SCREEN_H = Dimensions.get('window').height;
+const HEAT_CELL = Math.floor((CHART_W - 20) / 7);
 function Donut({ data, size = 150, stroke = 24 }) {
   const total = data.reduce((a, d) => a + d.value, 0);
   const r = (size - stroke) / 2, c = 2 * Math.PI * r; let offset = 0;
@@ -850,6 +853,135 @@ function CategorySheet({ visible, state, onClose, catApi, onDelCat, onDelSub, on
   );
 }
 
+// === Ətraflı Analitika səhifəsi (ana ekrandan ayrı) ===
+function AnalyticsSheet({ visible, state, onClose }) {
+  const [drillCat, setDrillCat] = useState(null);
+  const cur = useMemo(() => statsFor(state, 'month'), [state]);
+  const prev = useMemo(() => statsFor(state, 'lastmonth'), [state]);
+  const pc = (v, tot) => (tot ? Math.round((v / tot) * 100) : 0);
+
+  const now = new Date();
+  const dim = daysInMonth(now.getFullYear(), now.getMonth());
+  const dayN = now.getDate();
+  const avgDay = cur.total / Math.max(1, dayN);
+  const projected = Math.round(avgDay * dim);
+  const remaining = Math.max(0, projected - cur.total);
+
+  // B — kateqoriya müqayisəsi (bu ay vs keçən ay)
+  const allCats = [...new Set([...Object.keys(cur.categoryBreakdown), ...Object.keys(prev.categoryBreakdown)])];
+  const catCmp = allCats.map((c) => { const a = cur.categoryBreakdown[c] || 0, b = prev.categoryBreakdown[c] || 0; return { c, cur: a, prev: b, diff: a - b }; }).sort((x, y) => y.cur - x.cur);
+  const maxCmp = Math.max(1, ...catCmp.map((d) => Math.max(d.cur, d.prev)));
+
+  // C — təkrarlanan (bu ay 3+ dəfə) + keçən ay sayı
+  const keyOf = (t) => `${t.category}|${t.subCategory || ''}|${t.amount}`;
+  const rCur = {}; for (const t of cur.txs) { (rCur[keyOf(t)] = rCur[keyOf(t)] || { count: 0, t }).count++; }
+  const rPrev = {}; for (const t of prev.txs) { rPrev[keyOf(t)] = (rPrev[keyOf(t)] || 0) + 1; }
+  const recurring = Object.entries(rCur).filter(([, r]) => r.count >= 3).map(([k, r]) => ({ ...r.t, count: r.count, prevCount: rPrev[k] || 0, sum: r.t.amount * r.count })).sort((a, b) => b.sum - a.sum);
+
+  // D — ən böyük 5
+  const top5 = cur.txs.slice().sort((a, b) => b.amount - a.amount).slice(0, 5);
+
+  // E — alt-kateqoriya payları
+  const subMap = {}; for (const t of cur.txs) { const k = `${t.category}__${t.subCategory || '(altsız)'}`; subMap[k] = (subMap[k] || 0) + t.amount; }
+  const subE = Object.entries(subMap).map(([k, v]) => { const p = k.split('__'); return { c: p[0], s: p[1], v }; }).sort((a, b) => b.v - a.v);
+  const maxSub = Math.max(1, ...subE.map((e) => e.v));
+
+  // F — təqvim heatmap (bu ay)
+  const monthPrefix = todayYmd().slice(0, 7);
+  const maxDayVal = Math.max(1, ...Object.values(cur.dailyMap));
+  const firstDow = (new Date(now.getFullYear(), now.getMonth(), 1).getDay() + 6) % 7;
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= dim; d++) { const ds = `${monthPrefix}-${String(d).padStart(2, '0')}`; cells.push({ d, v: cur.dailyMap[ds] || 0 }); }
+  const heatColor = (v) => { if (v <= 0) return '#f1f5f9'; const r = v / maxDayVal; if (r > 0.66) return '#dc2626'; if (r > 0.4) return '#f97316'; if (r > 0.15) return '#fbbf24'; return '#bae6fd'; };
+
+  // G — kateqoriya dərinləşməsi
+  const dd = useMemo(() => {
+    if (!drillCat) return null;
+    const txs = cur.txs.filter((t) => t.category === drillCat);
+    const subs = {}; for (const t of txs) { const s = t.subCategory || '(altsız)'; subs[s] = (subs[s] || 0) + t.amount; }
+    const subEntries = Object.entries(subs).sort((a, b) => b[1] - a[1]);
+    const dmap = {}; for (const t of txs) dmap[t.date] = (dmap[t.date] || 0) + t.amount;
+    const vals = []; for (let d = 1; d <= dayN; d++) { const ds = `${monthPrefix}-${String(d).padStart(2, '0')}`; vals.push(dmap[ds] || 0); }
+    return { txs, subEntries, total: txs.reduce((a, t) => a + t.amount, 0), vals, topTx: txs.slice().sort((a, b) => b.amount - a.amount).slice(0, 8) };
+  }, [drillCat, cur]);
+
+  return (
+    <Sheet visible={visible} onClose={() => { setDrillCat(null); onClose(); }} title="📈 Analitika">
+      {drillCat && dd ? (
+        <>
+          <TouchableOpacity style={styles.crumb} onPress={() => { animate(); setDrillCat(null); }}><Text style={styles.crumbText}>‹ Geri · {catMeta(state, drillCat).icon} {drillCat}</Text></TouchableOpacity>
+          <Text style={styles.miniNote}>Bu ay {azn(dd.total)} · {dd.txs.length} əməliyyat</Text>
+          <Text style={styles.statH}>Aylıq trend</Text>
+          <View style={styles.chartCard}><LineChart values={dd.vals} width={CHART_W} height={70} color={catMeta(state, drillCat).color} /></View>
+          <Text style={styles.statH}>Alt-kateqoriyalar</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 8 }}>
+            <Donut data={dd.subEntries.map((e, i) => ({ value: e[1], color: COLOR_SET[i % COLOR_SET.length] }))} />
+            <View style={{ flex: 1, gap: 5 }}>
+              {dd.subEntries.slice(0, 7).map((e, i) => (
+                <View key={e[0]} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={{ width: 9, height: 9, borderRadius: 3, backgroundColor: COLOR_SET[i % COLOR_SET.length] }} />
+                  <Text style={{ flex: 1, color: '#334155', fontSize: 12 }} numberOfLines={1}>{e[0]}</Text>
+                  <Text style={{ color: '#0f172a', fontSize: 12, fontWeight: '700' }}>{azn(e[1])}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+          <Text style={styles.statH}>Ən böyük əməliyyatlar</Text>
+          {dd.topTx.map((t) => <View key={t.id} style={styles.topRow}><Text style={{ flex: 1, color: '#0f172a' }} numberOfLines={1}>{shortDate(t.date)} · {t.subCategory || '–'}{t.note ? ' · ' + t.note : ''}</Text><Text style={{ color: '#0f172a', fontWeight: '700' }}>{azn(t.amount)}</Text></View>)}
+        </>
+      ) : (
+        <>
+          <View style={styles.projCard}>
+            <Text style={styles.projLabel}>BU AY PROQNOZ (ay sonu)</Text>
+            <Text style={styles.projBig}>{azn(projected)}</Text>
+            <View style={styles.projRow}>
+              <View><Text style={styles.projSubL}>İndiyə qədər</Text><Text style={styles.projSubV}>{azn(cur.total)}</Text></View>
+              <View><Text style={styles.projSubL}>Gündəlik orta</Text><Text style={styles.projSubV}>{azn(avgDay)}</Text></View>
+              <View><Text style={styles.projSubL}>Qalan {Math.max(0, dim - dayN)} gün</Text><Text style={styles.projSubV}>~{azn(remaining)}</Text></View>
+            </View>
+          </View>
+
+          <Text style={styles.statH}>Bu ay ⇄ Keçən ay  <Text style={styles.tapHint}>(kateqoriyaya toxun)</Text></Text>
+          <View style={styles.cmpHead}>
+            <Text style={styles.cmpHeadT}>{azn(cur.total)}</Text>
+            <Text style={styles.cmpHeadT}>{prev.total ? <Text style={{ color: cur.total > prev.total ? '#dc2626' : '#16a34a' }}>{cur.total >= prev.total ? '↑' : '↓'} {Math.abs(Math.round((cur.total - prev.total) / prev.total * 100))}%  </Text> : null}<Text style={{ color: '#94a3b8', fontWeight: '400', fontSize: 12 }}>keçən {azn(prev.total)}</Text></Text>
+          </View>
+          {catCmp.slice(0, 14).map((d) => (
+            <TouchableOpacity key={d.c} style={{ marginBottom: 9 }} onPress={() => { animate(); setDrillCat(d.c); }} activeOpacity={0.7}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 3 }}>
+                <Text style={{ color: '#334155', fontSize: 13, fontWeight: '600' }}>{catMeta(state, d.c).icon} {d.c} ›</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#0f172a' }}>{azn(d.cur)}  <Text style={{ fontSize: 11, color: d.diff > 0 ? '#dc2626' : '#16a34a' }}>{d.prev ? (d.diff >= 0 ? '↑' : '↓') + Math.abs(Math.round(d.diff / d.prev * 100)) + '%' : 'yeni'}</Text></Text>
+              </View>
+              <View style={{ height: 6, borderRadius: 3, backgroundColor: '#e2e8f0', overflow: 'hidden' }}><View style={{ height: 6, width: `${(d.cur / maxCmp) * 100}%`, backgroundColor: catMeta(state, d.c).color }} /></View>
+            </TouchableOpacity>
+          ))}
+
+          <Text style={styles.statH}>Təkrarlanan xərclər  <Text style={styles.tapHint}>(bu ay 3+ dəfə)</Text></Text>
+          {recurring.length === 0 ? <Text style={styles.emptyMini}>Təkrarlanan tapılmadı</Text> : recurring.slice(0, 10).map((r, i) => (
+            <View key={i} style={styles.topRow}><Text style={{ flex: 1, color: '#0f172a' }} numberOfLines={1}>{catMeta(state, r.category).icon} {r.category}{r.subCategory ? ' · ' + r.subCategory : ''}  <Text style={{ color: '#94a3b8', fontSize: 12 }}>{azn(r.amount)} × {r.count}{r.prevCount ? ` (keçən ${r.prevCount})` : ''}</Text></Text><Text style={{ color: '#dc2626', fontWeight: '800' }}>{azn(r.sum)}</Text></View>
+          ))}
+
+          <Text style={styles.statH}>Ən böyük 5 əməliyyat</Text>
+          {top5.map((t) => <View key={t.id} style={styles.topRow}><Text style={{ flex: 1, color: '#0f172a' }} numberOfLines={1}>{shortDate(t.date)} · {catMeta(state, t.category).icon} {t.category}{t.subCategory ? '·' + t.subCategory : ''}</Text><Text style={{ color: '#0f172a', fontWeight: '800' }}>{azn(t.amount)}</Text></View>)}
+
+          <Text style={styles.statH}>Alt-kateqoriya payları</Text>
+          {subE.slice(0, 15).map((e, i) => <Bar key={i} label={`${catMeta(state, e.c).icon} ${e.c} · ${e.s}`} value={e.v} max={maxSub} color={catMeta(state, e.c).color} right={`${azn(e.v)} · ${pc(e.v, cur.total)}%`} />)}
+
+          <Text style={styles.statH}>Təqvim — günlük intensivlik</Text>
+          <View style={styles.heatWrap}>
+            <View style={styles.heatRow}>{WEEKDAYS_AZ.map((w) => <Text key={w} style={styles.heatDow}>{w}</Text>)}</View>
+            <View style={styles.heatGrid}>
+              {cells.map((c, i) => c ? <View key={i} style={[styles.heatCell, { backgroundColor: heatColor(c.v) }]}><Text style={[styles.heatNum, { color: (c.v / maxDayVal) > 0.4 ? '#fff' : '#94a3b8' }]}>{c.d}</Text></View> : <View key={i} style={[styles.heatCell, { backgroundColor: 'transparent' }]} />)}
+            </View>
+            <Text style={[styles.tapHint, { marginTop: 6 }]}>Qırmızı → çox xərclənən gün</Text>
+          </View>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
 function SettingsSheet({ visible, state, range, onSetRange, onClose, onSetCash, onReset, onOpenCats, onRestore, onLogout }) {
   const [cash, setCash] = useState('');
   const [acc, setAcc] = useState('');
@@ -952,6 +1084,20 @@ const styles = StyleSheet.create({
   sheetHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sheetTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
   sheetClose: { color: '#64748b', fontSize: 19, fontWeight: '700' },
+  projCard: { backgroundColor: '#0f172a', borderRadius: 16, padding: 16, marginBottom: 14 },
+  projLabel: { color: '#94a3b8', fontSize: 11, fontWeight: '700', letterSpacing: 0.4 },
+  projBig: { color: '#fff', fontSize: 32, fontWeight: '800', marginVertical: 3 },
+  projRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+  projSubL: { color: '#94a3b8', fontSize: 11 },
+  projSubV: { color: '#e2e8f0', fontSize: 14, fontWeight: '700', marginTop: 2 },
+  cmpHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  cmpHeadT: { fontSize: 14, fontWeight: '800', color: '#0f172a' },
+  heatWrap: { backgroundColor: '#fff', borderRadius: 14, padding: 10, borderWidth: 1, borderColor: '#e2e8f0' },
+  heatRow: { flexDirection: 'row', gap: 3, marginBottom: 4 },
+  heatDow: { width: HEAT_CELL, textAlign: 'center', fontSize: 10, color: '#94a3b8' },
+  heatGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
+  heatCell: { width: HEAT_CELL, height: HEAT_CELL, borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
+  heatNum: { fontSize: 10, fontWeight: '600' },
 
   formHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   formTitle: { color: '#0f172a', fontSize: 17, fontWeight: '800' },
