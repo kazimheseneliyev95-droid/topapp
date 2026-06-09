@@ -503,7 +503,7 @@ function Sheet({ visible, onClose, title, children }) {
           <Pressable style={styles.sheet} onPress={stop}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHead}><Text style={styles.sheetTitle}>{title}</Text><TouchableOpacity onPress={onClose} hitSlop={10}><Text style={styles.sheetClose}>✕</Text></TouchableOpacity></View>
-            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">{children}</ScrollView>
+            <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 12 }} showsVerticalScrollIndicator={true} keyboardShouldPersistTaps="handled">{children}</ScrollView>
           </Pressable>
         </KeyboardAvoidingView>
       </Pressable>
@@ -574,6 +574,7 @@ function Bar({ label, value, max, color, onPress, right }) {
   );
 }
 const CHART_W = Dimensions.get('window').width - 64;
+const SCREEN_H = Dimensions.get('window').height;
 function Donut({ data, size = 150, stroke = 24 }) {
   const total = data.reduce((a, d) => a + d.value, 0);
   const r = (size - stroke) / 2, c = 2 * Math.PI * r; let offset = 0;
@@ -736,6 +737,9 @@ function StatsSheet({ visible, state, onClose }) {
                 </View>
               </View>
 
+              <Text style={styles.statH}>Bütün kateqoriyalar ({catE.length})  <Text style={styles.tapHint}>(detay üçün toxun)</Text></Text>
+              {catE.map(([n, v]) => <Bar key={n} label={`${catMeta(state, n).icon} ${n}`} value={v} max={maxC} color={catMeta(state, n).color} right={`${azn(v)}  ·  ${pc(v)}%`} onPress={() => { animate(); setDrillCat(n); }} />)}
+
               <Text style={styles.statH}>Günlük trend</Text>
               <View style={styles.chartCard}><LineChart values={lineVals} width={CHART_W} height={70} color="#0EA5E9" /></View>
 
@@ -757,10 +761,12 @@ function StatsSheet({ visible, state, onClose }) {
             </>
           ) : null}
 
-          <Text style={styles.statH}>Növə görə</Text>
-          {kinds.map((k) => <Bar key={k.l} label={k.l} value={k.v} max={maxK} color={k.c} right={`${pc(k.v)}%  ·  ${azn(k.v)}`} />)}
-          <Text style={styles.statH}>Kateqoriya üzrə  <Text style={styles.tapHint}>(detay üçün toxun)</Text></Text>
-          {catE.length === 0 ? <Text style={styles.emptyMini}>Bu dövrdə xərc yoxdur</Text> : catE.map(([n, v]) => <Bar key={n} label={`${catMeta(state, n).icon} ${n}`} value={v} max={maxC} color={catMeta(state, n).color} right={`${pc(v)}%  ·  ${azn(v)}`} onPress={() => { animate(); setDrillCat(n); }} />)}
+          {catE.length === 0 ? <Text style={styles.emptyMini}>Bu dövrdə xərc yoxdur</Text> : (
+            <>
+              <Text style={styles.statH}>Növə görə</Text>
+              {kinds.map((k) => <Bar key={k.l} label={k.l} value={k.v} max={maxK} color={k.c} right={`${azn(k.v)}  ·  ${pc(k.v)}%`} />)}
+            </>
+          )}
         </>
       ) : !drillSub ? (
         <>
@@ -941,7 +947,7 @@ const styles = StyleSheet.create({
 
   modalRoot: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,23,42,0.45)' },
   kavWrap: { width: '100%' },
-  sheet: { backgroundColor: '#f1f5f9', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, paddingBottom: 24, maxHeight: '92%' },
+  sheet: { backgroundColor: '#f1f5f9', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 16, paddingBottom: 24, maxHeight: SCREEN_H * 0.92 },
   sheetHandle: { alignSelf: 'center', width: 42, height: 5, borderRadius: 3, backgroundColor: '#cbd5e1', marginBottom: 12 },
   sheetHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   sheetTitle: { color: '#0f172a', fontSize: 18, fontWeight: '800' },
