@@ -28,8 +28,9 @@ export async function setToken(t) {
 export async function loadCreds() {
   try { const raw = await AsyncStorage.getItem(CREDS_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
 }
-async function saveCreds(email, password) {
-  try { await AsyncStorage.setItem(CREDS_KEY, JSON.stringify({ email, password })); } catch (e) {}
+async function saveCreds(email) {
+  // Yalnız email saxlanır — parol heç vaxt cihazda saxlanmır (təhlükəsizlik).
+  try { await AsyncStorage.setItem(CREDS_KEY, JSON.stringify({ email })); } catch (e) {}
 }
 
 async function apiFetch(path, opts = {}) {
@@ -68,13 +69,13 @@ async function apiFetch(path, opts = {}) {
 export async function signin(email, password) {
   const d = await apiFetch('/api/auth/signin', { method: 'POST', body: { email, password } });
   await setToken(d.token);
-  await saveCreds(email, password);
+  await saveCreds(email);
   return d.user;
 }
 export async function signup(email, password) {
   const d = await apiFetch('/api/auth/signup', { method: 'POST', body: { email, password } });
   await setToken(d.token);
-  await saveCreds(email, password);
+  await saveCreds(email);
   return d.user;
 }
 

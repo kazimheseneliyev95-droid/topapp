@@ -121,12 +121,11 @@ function LoginScreen({ onDone }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  // İlk dəfə daxil olduğun user/parol yadda qalır → avtomatik doldur.
-  // Hələ heç giriş olmayıbsa, importlu demo hesabı ilə doldur (bir toxunuşla giriş).
+  // Yalnız EMAIL yadda qalır → avtomatik dolur. Parol NƏ kodda, NƏ də cihazda
+  // saxlanmır — yalnız serverdə (DB) hash kimi durur; hər girişdə özün yazırsan.
   useEffect(() => { (async () => {
     const c = await api.loadCreds();
-    if (c && c.email) { setEmail(c.email); if (c.password) setPassword(c.password); }
-    else { setEmail('kazim95@gmail.com'); setPassword('kazim12'); }
+    if (c && c.email) setEmail(c.email);
   })(); }, []);
   const submit = async () => {
     if (busy) return;
