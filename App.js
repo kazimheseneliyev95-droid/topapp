@@ -71,6 +71,7 @@ export default function App() {
   const [booting, setBooting] = useState(true);   // token yoxlanır
   const [authed, setAuthed] = useState(false);
   const [loading, setLoading] = useState(false);  // serverdən state yüklənir
+  const [syncErr, setSyncErr] = useState(false);   // son save serverə getmədi?
   const [state, setState] = useState(emptyState());
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -93,16 +94,23 @@ export default function App() {
     setBooting(false);
   })(); }, []);
 
-  // Online saxlama (debounce) — yalnız daxil olduqdan və yükləndikdən sonra
+  // Hər dəyişiklikdə DƏRHAL lokal backup (server save uğursuz olsa belə data itməsin)
+  useEffect(() => { if (authed && !loading) api.cacheState(state); }, [state, authed, loading]);
+
+  // Online saxlama (debounce) — uğursuz olsa syncErr göstər; növbəti dəyişiklikdə retry
   useEffect(() => {
     if (!authed || loading) return;
-    const t = setTimeout(() => { api.saveOnline(state).catch((e) => { if (e && e.code === 401) setAuthed(false); }); }, 600);
+    const t = setTimeout(() => {
+      api.saveOnline(state)
+        .then(() => setSyncErr(false))
+        .catch((e) => { if (e && e.code === 401) setAuthed(false); else setSyncErr(true); });
+    }, 600);
     return () => clearTimeout(t);
   }, [state, authed, loading]);
 
   // Arxa plana keçəndə dərhal saxla
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (st) => { if (st !== 'active' && authed) api.saveOnline(stateRef.current).catch(() => {}); });
+    const sub = AppState.addEventListener('change', (st) => { if (st !== 'active' && authed) api.saveOnline(stateRef.current).then(() => setSyncErr(false)).catch(() => {}); });
     return () => sub.remove();
   }, [authed]);
 
@@ -112,7 +120,16 @@ export default function App() {
   if (booting) return <View style={[styles.root, styles.center]}><StatusBar style="dark" /><ActivityIndicator color="#0EA5E9" size="large" /></View>;
   if (!authed) return <LoginScreen onDone={pullFromServer} />;
   if (loading) return <View style={[styles.root, styles.center]}><StatusBar style="dark" /><ActivityIndicator color="#0EA5E9" size="large" /></View>;
-  return <Dashboard state={state} mutate={mutate} onLogout={handleLogout} />;
+  return (
+    <View style={{ flex: 1 }}>
+      <Dashboard state={state} mutate={mutate} onLogout={handleLogout} />
+      {syncErr ? (
+        <TouchableOpacity style={styles.syncBar} activeOpacity={0.85} onPress={() => { api.saveOnline(stateRef.current).then(() => setSyncErr(false)).catch(() => {}); }}>
+          <Text style={styles.syncBarT}>⚠️ Serverə yazılmadı — datan lokal saxlanıldı. Yenidən cəhd üçün toxun.</Text>
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
 }
 
 function LoginScreen({ onDone }) {
@@ -1097,6 +1114,8 @@ const styles = StyleSheet.create({
   heatGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 3 },
   heatCell: { width: HEAT_CELL, height: HEAT_CELL, borderRadius: 5, alignItems: 'center', justifyContent: 'center' },
   heatNum: { fontSize: 10, fontWeight: '600' },
+  syncBar: { position: 'absolute', left: 12, right: 12, bottom: 14, backgroundColor: '#b91c1c', borderRadius: 12, paddingVertical: 11, paddingHorizontal: 14, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 4 },
+  syncBarT: { color: '#fff', fontSize: 12.5, fontWeight: '600', textAlign: 'center' },
 
   formHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   formTitle: { color: '#0f172a', fontSize: 17, fontWeight: '800' },
