@@ -516,15 +516,18 @@ function SubPickerModal({ visible, state, cat, catApi, onClose, onPick }) {
 function Sheet({ visible, onClose, title, children }) {
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.modalRoot} onPress={onClose}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kavWrap}>
-          <Pressable style={styles.sheet} onPress={stop}>
+      <View style={styles.modalRoot}>
+        {/* Backdrop AYRICA və arxada — ScrollView heç bir touch-Pressable-ın içində
+            deyil, ona görə scroll jesti responder uğrunda yarışmır (ilişmə bitir). */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kavWrap} pointerEvents="box-none">
+          <View style={styles.sheet}>
             <View style={styles.sheetHandle} />
             <View style={styles.sheetHead}><Text style={styles.sheetTitle}>{title}</Text><TouchableOpacity onPress={onClose} hitSlop={10}><Text style={styles.sheetClose}>✕</Text></TouchableOpacity></View>
             <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: 12 }} showsVerticalScrollIndicator={true} keyboardShouldPersistTaps="handled">{children}</ScrollView>
-          </Pressable>
+          </View>
         </KeyboardAvoidingView>
-      </Pressable>
+      </View>
     </Modal>
   );
 }
